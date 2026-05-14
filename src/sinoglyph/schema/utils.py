@@ -48,16 +48,24 @@ def require_enum(enum_type: type[EnumT], value: object, context: str) -> EnumT:
 
 
 def require_positive_integer(value: object, context: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{context} expects a positive integer")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"{context} expects a positive integer")
+        value = int(value)
     if value <= 0:
         raise ValueError(f"{context} expects a positive integer")
     return value
 
 
 def require_non_negative_integer(value: object, context: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{context} expects a non-negative integer")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"{context} expects a non-negative integer")
+        value = int(value)
     if value < 0:
         raise ValueError(f"{context} expects a non-negative integer")
     return value

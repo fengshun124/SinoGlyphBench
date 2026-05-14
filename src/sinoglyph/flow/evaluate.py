@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from time import time
+from time import sleep, time
 from typing import cast
 
 from tqdm.auto import tqdm
@@ -298,6 +298,8 @@ def _evaluate_task(
         except Exception as exc:
             request_error = str(exc)
             parse_error = None
+            if attempt < attempts:
+                sleep(1)
             continue
 
         try:
@@ -305,6 +307,8 @@ def _evaluate_task(
         except ValueError as exc:
             parse_error = str(exc)
             request_error = None
+            if attempt < attempts:
+                sleep(1)
             continue
 
         parse_error = None

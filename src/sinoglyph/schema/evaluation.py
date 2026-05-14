@@ -25,7 +25,7 @@ from sinoglyph.schema.utils import (
 )
 
 LLM_DEFAULTS: JsonObject = {"retries": 3, "timeout": 120, "temperature": 0}
-EVALUATION_DEFAULTS: JsonObject = {"n_jobs": 4}
+EVALUATION_DEFAULTS: JsonObject = {"n_jobs": 5}
 RENDER_DEFAULTS: JsonObject = {
     "line_breaks": False,
     "line_break_max_chars": 32,
@@ -215,8 +215,21 @@ class EvaluationConfig:
         return output
 
     def fingerprint(self) -> str:
+        render = None
+        if self.render is not None:
+            render = {
+                **{
+                    key: value
+                    for key, value in self.render.items()
+                    if key not in {"cjk_font", "lgc_font", "symbol_font", "emoji_font"}
+                },
+                "font_sha256": {
+                    key.removesuffix("_font"): _file_sha256(str(self.render[key]))
+                    for key in ("cjk_font", "lgc_font", "symbol_font", "emoji_font")
+                },
+            }
         payload: JsonObject = {
-            "corpus_sha256": _file_sha256(self.evaluation.corpus_path),
+            "corpus": {"sha256": _file_sha256(self.evaluation.corpus_path)},
             "attempts": self.evaluation.attempts,
             "limit": self.evaluation.limit,
             "llm": self.resolved_llm_public_config(),
@@ -224,10 +237,7 @@ class EvaluationConfig:
             "response": {"schema": self.response_schema},
             "tasks": [task.to_mapping() for task in self.tasks],
         }
-        if self.render is not None:
-            render = dict(self.render)
-            for key in ("cjk_font", "lgc_font", "symbol_font", "emoji_font"):
-                render[f"{key}_sha256"] = _file_sha256(str(render.pop(key)))
+        if render is not None:
             payload["render"] = render
         text = json.dumps(
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
@@ -252,9 +262,11 @@ class EvaluationConfig:
         llm = dict(self.llm)
         _resolve_env_value(llm, "base_url", "base_url_env")
         _resolve_env_value(llm, "model", "model_env")
-        if "api_key" in llm:
-            llm["api_key"] = "<redacted>"
-        return llm
+        return {
+            key: value
+            for key, value in llm.items()
+            if key not in {"api_key", "api_key_env", "base_url_env", "model_env"}
+        }
 
     def resolved_llm_client_config(self) -> JsonObject:
         llm = dict(self.llm)
@@ -370,21 +382,42 @@ def _normalize_tasks(raw_tasks: object) -> list[EvaluationTask]:
     return tasks
 
 
-def _normalize_llm(raw_llm: object) -> JsonObject:
+def _normalize_llm(raw_llm: object, *, public: bool = False) -> JsonObject:
     llm = dict(require_mapping(raw_llm, "llm"))
-    require_keys(llm, {"max_tokens"}, "llm")
-    _require_exactly_one_string(llm, "api_key", "api_key_env", "llm")
-    _require_exactly_one_string(llm, "base_url", "base_url_env", "llm")
-    _require_exactly_one_string(llm, "model", "model_env", "llm")
+    require_keys(
+        llm,
+        {"base_url", "max_tokens", "model"} if public else {"max_tokens"},
+        "llm",
+    )
+    if public:
+        llm = {
+            key: value
+            for key, value in llm.items()
+            if key not in {"api_key", "api_key_env", "base_url_env", "model_env"}
+        }
+        require_string(llm["base_url"], "llm.base_url")
+        require_string(llm["model"], "llm.model")
+    else:
+        _require_exactly_one_string(llm, "api_key", "api_key_env", "llm")
+        _require_exactly_one_string(llm, "base_url", "base_url_env", "llm")
+        _require_exactly_one_string(llm, "model", "model_env", "llm")
     llm.update({key: llm.get(key, value) for key, value in LLM_DEFAULTS.items()})
-    require_positive_integer(llm["max_tokens"], "llm.max_tokens")
-    require_non_negative_integer(llm["retries"], "llm.retries")
+    llm["max_tokens"] = require_positive_integer(llm["max_tokens"], "llm.max_tokens")
+    llm["retries"] = require_non_negative_integer(llm["retries"], "llm.retries")
     timeout = require_number(llm["timeout"], "llm.timeout")
     if timeout <= 0:
         raise ValueError("llm.timeout expects a positive number")
+    llm["timeout"] = (
+        int(timeout) if isinstance(timeout, float) and timeout.is_integer() else timeout
+    )
     temperature = require_number(llm["temperature"], "llm.temperature")
     if temperature < 0 or temperature > 2:
         raise ValueError("llm.temperature expects a number between 0 and 2")
+    llm["temperature"] = (
+        int(temperature)
+        if isinstance(temperature, float) and temperature.is_integer()
+        else temperature
+    )
     return llm
 
 
@@ -420,9 +453,9 @@ def _normalize_render(raw_render: object) -> JsonObject:
         "right",
     }:
         raise ValueError("render.align must be one of: left, center, right")
-    require_positive_integer(render["size_px"], "render.size_px")
-    require_non_negative_integer(render["pad"], "render.pad")
-    require_positive_integer(render["dpi"], "render.dpi")
+    render["size_px"] = require_positive_integer(render["size_px"], "render.size_px")
+    render["pad"] = require_non_negative_integer(render["pad"], "render.pad")
+    render["dpi"] = require_positive_integer(render["dpi"], "render.dpi")
     for key in (
         "cjk_font",
         "lgc_font",
@@ -433,7 +466,7 @@ def _normalize_render(raw_render: object) -> JsonObject:
     ):
         require_string(render[key], f"render.{key}")
     require_boolean(render["line_breaks"], "render.line_breaks")
-    require_positive_integer(
+    render["line_break_max_chars"] = require_positive_integer(
         render["line_break_max_chars"], "render.line_break_max_chars"
     )
     return render
@@ -450,7 +483,7 @@ def _validate_meta(raw_meta: object, tasks: list[EvaluationTask]) -> JsonObject:
     require_string(meta["name"], "meta.name")
     require_string(meta["corpus_path"], "meta.corpus_path")
     require_positive_integer(meta["attempts"], "meta.attempts")
-    _normalize_llm(meta["llm"])
+    _normalize_llm(meta["llm"], public=True)
     PromptConfig.from_mapping(meta["prompt"], "meta.prompt")
     _normalize_response_schema(meta["response"])
     if "render" in meta:
