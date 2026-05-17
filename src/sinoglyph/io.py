@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, TypeAlias
 
 import tomllib
+from dotenv import load_dotenv
 
 PathLike: TypeAlias = str | os.PathLike[str]
 
@@ -168,10 +169,19 @@ def load_toml(file_path: PathLike) -> dict[str, Any]:
         return tomllib.load(f)
 
 
-def load_env_file(file_path: PathLike = ".env", *, override: bool = False) -> None:
-    from dotenv import load_dotenv
+def load_env_file(
+    file_path: PathLike = ".env",
+    *,
+    override: bool = False,
+    base_dir: PathLike | None = None,
+) -> Path:
 
-    load_dotenv(dotenv_path=file_path, override=override)
+    env_path = Path(file_path).expanduser()
+    if base_dir is not None and not env_path.is_absolute():
+        env_path = Path(base_dir) / env_path
+    env_path = env_path.resolve(strict=False)
+    load_dotenv(dotenv_path=env_path, override=override)
+    return env_path
 
 
 def _atomic_write_text(

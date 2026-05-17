@@ -8,7 +8,7 @@ from typing import TypeAlias, cast
 from tqdm.auto import tqdm
 
 from sinoglyph.io import PathLike, save_json
-from sinoglyph.render import RenderConfig, TextRenderer
+from sinoglyph.render import TextRenderConfig, TextRenderer
 from sinoglyph.schema.base import JsonObject
 from sinoglyph.schema.character import (
     CharacterDecomposition,
@@ -35,7 +35,7 @@ class CatalogCandidate:
 
 
 @dataclass(frozen=True)
-class CatalogFigureConfig:
+class CatalogRenderConfig:
     cjk_font: PathLike
     lgc_font: PathLike
     symbol_font: PathLike
@@ -114,7 +114,7 @@ class CharacterCatalogBuilder:
             }
 
         result = cast(JsonObject, catalog)
-        CharacterPerturbCatalog.from_mapping(result)
+        CharacterPerturbCatalog.parse_mapping(result)
         return result
 
     def _make_direct_candidates(
@@ -254,13 +254,13 @@ class CharacterCatalogBuilder:
         )
 
 
-def build_character_catalog(
+def generate_character_catalog(
     decomposition_path: PathLike,
     substitution_path: PathLike,
     output_path: PathLike | None = None,
 ) -> JsonObject:
-    decomposition = CharacterDecomposition.from_json(decomposition_path)
-    substitution = CharacterSubstitution.from_json(substitution_path)
+    decomposition = CharacterDecomposition.load_json(decomposition_path)
+    substitution = CharacterSubstitution.load_json(substitution_path)
     result = CharacterCatalogBuilder(decomposition, substitution).build()
 
     if output_path is not None:
@@ -268,14 +268,14 @@ def build_character_catalog(
     return result
 
 
-def render_character_catalog_figures(
+def render_catalog_figures(
     catalog: Mapping[str, object],
     figure_dir: PathLike,
-    figure_config: CatalogFigureConfig,
+    figure_config: CatalogRenderConfig,
 ) -> int:
     output_dir = Path(figure_dir).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
-    render_config = RenderConfig(
+    render_config = TextRenderConfig(
         size_px=figure_config.size_px,
         fg_color=figure_config.fg_color,
         bg_color=figure_config.bg_color,

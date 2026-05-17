@@ -37,7 +37,7 @@ class CharacterCatalogEntry:
     perturbations: CharacterPerturbations
 
     @classmethod
-    def from_mapping(cls, mapping: object, context: str) -> "CharacterCatalogEntry":
+    def parse_mapping(cls, mapping: object, context: str) -> "CharacterCatalogEntry":
         raw = require_mapping(mapping, context)
         require_keys(raw, {"parts", "perturbations"}, context)
         return cls(
@@ -47,7 +47,7 @@ class CharacterCatalogEntry:
             ),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "parts": list(self.parts),
             "perturbations": [list(variant) for variant in self.perturbations],
@@ -59,7 +59,7 @@ class CharacterDecomposition:
     entries: dict[str, CharacterParts]
 
     @classmethod
-    def from_mapping(cls, mapping: object) -> "CharacterDecomposition":
+    def parse_mapping(cls, mapping: object) -> "CharacterDecomposition":
         raw = require_mapping(mapping, "CharacterDecomposition")
         return cls(
             {
@@ -72,14 +72,14 @@ class CharacterDecomposition:
         )
 
     @classmethod
-    def from_json(cls, file_path: PathLike) -> "CharacterDecomposition":
-        return cls.from_mapping(load_json(file_path))
+    def load_json(cls, file_path: PathLike) -> "CharacterDecomposition":
+        return cls.parse_mapping(load_json(file_path))
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {character: list(parts) for character, parts in self.entries.items()}
 
-    def to_json(self, file_path: PathLike) -> None:
-        save_json(self.to_mapping(), file_path)
+    def save_json(self, file_path: PathLike) -> None:
+        save_json(self.export_mapping(), file_path)
 
     def __contains__(self, character: object) -> bool:
         return isinstance(character, str) and character in self.entries
@@ -97,7 +97,7 @@ class CharacterSubstitutionEntry:
     perturbations: CharacterPerturbations
 
     @classmethod
-    def from_mapping(
+    def parse_mapping(
         cls, mapping: object, context: str
     ) -> "CharacterSubstitutionEntry":
         raw = require_mapping(mapping, context)
@@ -112,7 +112,7 @@ class CharacterSubstitutionEntry:
             ),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "unit_type": self.unit_type,
             "perturbation": [list(variant) for variant in self.perturbations],
@@ -124,13 +124,13 @@ class CharacterSubstitution:
     entries: dict[str, CharacterSubstitutionEntry]
 
     @classmethod
-    def from_mapping(cls, mapping: object) -> "CharacterSubstitution":
+    def parse_mapping(cls, mapping: object) -> "CharacterSubstitution":
         raw = require_mapping(mapping, "CharacterSubstitution")
         return cls(
             {
                 require_string(
                     unit, "CharacterSubstitution key"
-                ): CharacterSubstitutionEntry.from_mapping(
+                ): CharacterSubstitutionEntry.parse_mapping(
                     entry,
                     f"CharacterSubstitution[{unit!r}]",
                 )
@@ -139,14 +139,14 @@ class CharacterSubstitution:
         )
 
     @classmethod
-    def from_json(cls, file_path: PathLike) -> "CharacterSubstitution":
-        return cls.from_mapping(load_json(file_path))
+    def load_json(cls, file_path: PathLike) -> "CharacterSubstitution":
+        return cls.parse_mapping(load_json(file_path))
 
-    def to_mapping(self) -> JsonObject:
-        return {unit: entry.to_mapping() for unit, entry in self.entries.items()}
+    def export_mapping(self) -> JsonObject:
+        return {unit: entry.export_mapping() for unit, entry in self.entries.items()}
 
-    def to_json(self, file_path: PathLike) -> None:
-        save_json(self.to_mapping(), file_path)
+    def save_json(self, file_path: PathLike) -> None:
+        save_json(self.export_mapping(), file_path)
 
     def __contains__(self, unit: object) -> bool:
         return isinstance(unit, str) and unit in self.entries
@@ -166,13 +166,13 @@ class CharacterPerturbCatalog:
     entries: dict[str, CharacterCatalogEntry]
 
     @classmethod
-    def from_mapping(cls, mapping: object) -> "CharacterPerturbCatalog":
+    def parse_mapping(cls, mapping: object) -> "CharacterPerturbCatalog":
         raw = require_mapping(mapping, "CharacterPerturbCatalog")
         return cls(
             {
                 require_string(
                     character, "CharacterPerturbCatalog key"
-                ): CharacterCatalogEntry.from_mapping(
+                ): CharacterCatalogEntry.parse_mapping(
                     entry,
                     f"CharacterPerturbCatalog[{character!r}]",
                 )
@@ -181,16 +181,17 @@ class CharacterPerturbCatalog:
         )
 
     @classmethod
-    def from_json(cls, file_path: PathLike) -> "CharacterPerturbCatalog":
-        return cls.from_mapping(load_json(file_path))
+    def load_json(cls, file_path: PathLike) -> "CharacterPerturbCatalog":
+        return cls.parse_mapping(load_json(file_path))
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
-            character: entry.to_mapping() for character, entry in self.entries.items()
+            character: entry.export_mapping()
+            for character, entry in self.entries.items()
         }
 
-    def to_json(self, file_path: PathLike) -> None:
-        save_json(self.to_mapping(), file_path)
+    def save_json(self, file_path: PathLike) -> None:
+        save_json(self.export_mapping(), file_path)
 
     def __contains__(self, character: object) -> bool:
         return isinstance(character, str) and character in self.entries
@@ -208,6 +209,6 @@ class CharacterPerturbCatalog:
         return [list(variant) for variant in self.entries[character].perturbations]
 
 
-load_character_decomposition = CharacterDecomposition.from_json
-load_character_substitution = CharacterSubstitution.from_json
-load_character_perturb_catalog = CharacterPerturbCatalog.from_json
+load_character_decomposition = CharacterDecomposition.load_json
+load_character_substitution = CharacterSubstitution.load_json
+load_character_perturb_catalog = CharacterPerturbCatalog.load_json

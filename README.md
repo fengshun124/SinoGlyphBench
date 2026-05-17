@@ -7,11 +7,11 @@ The benchmark uses semantic anchors to separate meaning-critical characters from
 ## What's Included
 
 - `data/character/`: character decomposition data, substitution rules, the generated perturbation catalog, and optional catalog figures.
-- `data/corpus/`: raw annotation shards, literature-source corpora, annotated corpus variants, and generated perturbed corpus variants.
+- `data/corpus/`: literature-source corpora, annotated corpus variants, and generated perturbed corpus variants.
 - `config/`: TOML evaluation configs for model runs.
 - `evaluation/`: evaluation JSON outputs.
 - `cache/`: resumable per-entry checkpoints for evaluation runs.
-- `src/sinoglyph/`: schema validation, corpus/catalog builders, rendering, LLM calls, and evaluation flow.
+- `src/sinoglyph/`: schema validation, data-generation pipelines, evaluation runner, rendering, LLM calls, and shared I/O helpers.
 
 ## Quickstart
 
@@ -108,6 +108,8 @@ The `chat` command reads `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` by defau
 
 The full workflow is: build the character catalog, build a perturbed corpus from annotations, optionally render text probes, then run model evaluation from a TOML config.
 
+The Python implementation is organized by function: `sinoglyph.pipeline` builds catalog and corpus artifacts, `sinoglyph.evaluate` runs model evaluation, `sinoglyph.schema` validates structured data, and `sinoglyph.render` renders text probes and image-mode inputs.
+
 ### Build The Character Catalog
 
 The catalog combines character decompositions with substitution rules. It can also render per-character catalog figures for inspection.
@@ -141,6 +143,8 @@ The corpus builder applies the character catalog to annotated moderation example
 ```bash
 python src/cli.py corpus
 ```
+
+This reads `data/corpus/annotated.json` by default and writes `data/corpus/perturbed.json`.
 
 Fully customized example:
 

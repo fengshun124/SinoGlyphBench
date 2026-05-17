@@ -5,7 +5,7 @@ from tempfile import NamedTemporaryFile
 
 import click
 
-from sinoglyph.flow.corpus import build_perturbed_corpus
+from sinoglyph.pipeline.corpus import generate_perturbed_corpus
 from sinoglyph.io import load_env_file
 
 
@@ -105,13 +105,13 @@ def build_catalog_command(
     pad: int,
     skip_figures: bool,
 ) -> None:
-    from sinoglyph.flow.catalog import (
-        CatalogFigureConfig,
-        build_character_catalog,
-        render_character_catalog_figures,
+    from sinoglyph.pipeline.catalog import (
+        CatalogRenderConfig,
+        generate_character_catalog,
+        render_catalog_figures,
     )
 
-    generated = build_character_catalog(
+    generated = generate_character_catalog(
         decomposition_path, substitution_path, catalog_output_path
     )
     click.echo(f"Wrote {len(generated)} catalog entries to {catalog_output_path}")
@@ -119,7 +119,7 @@ def build_catalog_command(
     if skip_figures:
         return
 
-    figure_config = CatalogFigureConfig(
+    figure_config = CatalogRenderConfig(
         cjk_font=cjk_font,
         lgc_font=lgc_font,
         symbol_font=symbol_font,
@@ -127,7 +127,7 @@ def build_catalog_command(
         dpi=300,
         pad=pad,
     )
-    rendered = render_character_catalog_figures(generated, figure_dir, figure_config)
+    rendered = render_catalog_figures(generated, figure_dir, figure_config)
     click.echo(f"Wrote {rendered} catalog figures to {figure_dir}")
 
 
@@ -164,7 +164,7 @@ def build_corpus_command(
     catalog_path: Path,
     output_path: Path,
 ) -> None:
-    generated = build_perturbed_corpus(annotated_path, catalog_path, output_path)
+    generated = generate_perturbed_corpus(annotated_path, catalog_path, output_path)
     click.echo(f"Wrote {len(generated)} perturbed corpus entries to {output_path}")
 
 
@@ -198,22 +198,63 @@ def build_corpus_command(
     default=None,
     help="Parallel corpus-entry workers. Defaults to evaluation.n_jobs.",
 )
+@click.option(
+    "--env-file",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    default=None,
+    help="Dotenv file to load before resolving LLM env vars. Defaults to .env in the current working directory.",
+)
+@click.option(
+    "--env-override",
+    is_flag=True,
+    help="Let values from --env-file override existing shell environment variables.",
+)
 def evaluate_command(
     config_path: Path,
     output_path: Path | None,
     cache_dir: Path | None,
     n_jobs: int | None,
+    env_file: Path | None,
+    env_override: bool,
 ) -> None:
-    from sinoglyph.flow.evaluate import run_evaluation
+    from sinoglyph.evaluate import run_evaluation
     from sinoglyph.schema.evaluation import EvaluationConfig
 
+    env_path = Path(".env") if env_file is None else env_file
+    env_path = _display_path(env_path)
+    evaluation = EvaluationConfig.load_toml(config_path).evaluation
+    resolved_output = _display_path(
+        output_path
+        if output_path is not None
+        else Path(evaluation.output_dir) / f"{evaluation.name}.json"
+    )
+    resolved_cache = _display_path(
+        cache_dir if cache_dir is not None else Path(evaluation.cache_dir)
+    )
+    resolved_corpus = _display_path(evaluation.corpus_path)
+    resolved_n_jobs = n_jobs if n_jobs is not None else evaluation.n_jobs
+    click.echo("Evaluation preflight:")
+    click.echo(f"  config: {config_path.expanduser().resolve(strict=False)}")
+    click.echo(f"  env: {env_path} (override={env_override})")
+    click.echo(f"  corpus: {resolved_corpus}")
+    click.echo(f"  output: {resolved_output}")
+    click.echo(f"  cache: {resolved_cache}")
+    click.echo(f"  cache images: {resolved_cache / 'images'}")
+    click.echo(f"  limit: {'full corpus' if evaluation.limit is None else evaluation.limit}")
+    click.echo(f"  n_jobs: {resolved_n_jobs}")
     try:
-        result = run_evaluation(config_path, output_path, cache_dir, n_jobs)
+        result = run_evaluation(
+            config_path,
+            output_path,
+            cache_dir,
+            n_jobs,
+            env_file=env_file,
+            env_override=env_override,
+        )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
     output = output_path
     if output is None:
-        evaluation = EvaluationConfig.from_toml(config_path).evaluation
         output = Path(evaluation.output_dir) / f"{evaluation.name}.json"
     click.echo(f"Wrote {len(result['corpus'])} evaluated corpus entries to {output}")
 
@@ -307,13 +348,13 @@ def render_command(
     dpi: int,
     pad: int,
 ) -> None:
-    from sinoglyph.render import RenderConfig, TextRenderer
+    from sinoglyph.render import TextRenderConfig, TextRenderer
 
     if output_path is None:
         with NamedTemporaryFile(suffix=".png", prefix="render_", delete=False) as f:
             output_path = Path(f.name)
     try:
-        config = RenderConfig(
+        config = TextRenderConfig(
             size_px=size_px,
             fg_color=fg_color,
             bg_color=bg_color,
@@ -404,14 +445,14 @@ def chat_command(
     json_schema_path: Path | None,
     params: tuple[str, ...],
 ) -> None:
-    from sinoglyph.llm import LLMClient
+    from sinoglyph.llm import ChatClient
 
     load_env_file()
     schema = None
     if json_schema_path is not None:
         schema = json.loads(json_schema_path.read_text(encoding="utf-8"))
     try:
-        client = LLMClient(
+        client = ChatClient(
             base_url=base_url,
             api_key=api_key,
             model=model,
@@ -451,6 +492,10 @@ def _parse_param(value: str) -> tuple[str, object]:
 
 def _params(values: tuple[str, ...]) -> dict[str, object]:
     return dict(_parse_param(value) for value in values)
+
+
+def _display_path(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve(strict=False)
 
 
 def _env_default(name: str) -> str:

@@ -29,7 +29,7 @@ class PerturbedCorpusBuilder:
 
     def build(self) -> JsonArray:
         result: JsonArray = [
-            self._build_entry(entry).to_mapping() for entry in self._annotated
+            self._build_entry(entry).export_mapping() for entry in self._annotated
         ]
         parse_perturbed_corpus(result)
         return result
@@ -50,7 +50,7 @@ class PerturbedCorpusBuilder:
         denominator = len(entry.text)
         anchor_fraction = _fraction(len(anchor_substitutions), denominator)
         non_anchor_fraction = _fraction(len(non_anchor_substitutions), denominator)
-        return PerturbedCorpusEntry.from_mapping(
+        return PerturbedCorpusEntry.parse_mapping(
             {
                 "id": entry.id,
                 "text": entry.text,
@@ -115,13 +115,13 @@ class PerturbedCorpusBuilder:
         ]
 
 
-def build_perturbed_corpus(
+def generate_perturbed_corpus(
     annotated_path: PathLike,
     catalog_path: PathLike,
     output_path: PathLike | None = None,
 ) -> JsonArray:
     annotated = load_annotated_corpus(annotated_path)
-    catalog = CharacterPerturbCatalog.from_json(catalog_path)
+    catalog = CharacterPerturbCatalog.load_json(catalog_path)
     result = PerturbedCorpusBuilder(annotated, catalog).build()
 
     if output_path is not None:
@@ -164,7 +164,7 @@ def _unique_substitution_records(
     substitutions: list[CorpusSubstitution],
 ) -> list[JsonObject]:
     records_by_key = {
-        _substitution_record_key(substitution): substitution.record.to_mapping()
+        _substitution_record_key(substitution): substitution.record.export_mapping()
         for substitution in substitutions
     }
     return list(records_by_key.values())

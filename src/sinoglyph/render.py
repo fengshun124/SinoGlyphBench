@@ -24,7 +24,7 @@ _CMAP_CACHE: dict[str, frozenset[int]] = {}
 _FONT_CACHE: dict[tuple[str, int], FreeTypeFont] = {}
 
 
-class RenderConfig:
+class TextRenderConfig:
     _MAX_SIZE_PX = 1024
     _MAX_PAD_PX = 4096
     _MAX_DPI = 2400
@@ -78,24 +78,24 @@ class RenderConfig:
         return f"{type(self).__name__}(size_px={self._size_px}, align={self._align!r})"
 
     @classmethod
-    def from_dict(cls, mapping: dict[str, object]) -> "RenderConfig":
+    def parse_dict(cls, mapping: dict[str, object]) -> "TextRenderConfig":
         if not isinstance(mapping, dict):
-            raise TypeError("RenderConfig.from_dict expects a mapping")
+            raise TypeError("TextRenderConfig.parse_dict expects a mapping")
         return cls(**mapping)
 
     @classmethod
-    def from_config(
+    def load_config(
         cls,
-        config: "RenderConfig | dict[str, object] | PathLike",
+        config: "TextRenderConfig | dict[str, object] | PathLike",
         *,
         section: str = "render",
-    ) -> "RenderConfig":
+    ) -> "TextRenderConfig":
         if isinstance(config, cls):
             return config
         mapping = cls._load_config_mapping(config, section)
-        return cls.from_dict(mapping)
+        return cls.parse_dict(mapping)
 
-    def to_dict(self) -> dict[str, object]:
+    def export_dict(self) -> dict[str, object]:
         return {
             "size_px": self._size_px,
             "fg_color": self._fg_color,
@@ -187,8 +187,8 @@ class RenderConfig:
             raise TypeError("size_px must be a positive integer")
         if size_px <= 0:
             raise ValueError("size_px must be a positive integer")
-        if size_px > RenderConfig._MAX_SIZE_PX:
-            raise ValueError(f"size_px must be at most {RenderConfig._MAX_SIZE_PX}")
+        if size_px > TextRenderConfig._MAX_SIZE_PX:
+            raise ValueError(f"size_px must be at most {TextRenderConfig._MAX_SIZE_PX}")
 
     @staticmethod
     def _validate_dpi(dpi: object) -> None:
@@ -196,8 +196,8 @@ class RenderConfig:
             raise TypeError("dpi must be a positive integer")
         if dpi <= 0:
             raise ValueError("dpi must be a positive integer")
-        if dpi > RenderConfig._MAX_DPI:
-            raise ValueError(f"dpi must be at most {RenderConfig._MAX_DPI}")
+        if dpi > TextRenderConfig._MAX_DPI:
+            raise ValueError(f"dpi must be at most {TextRenderConfig._MAX_DPI}")
 
     @staticmethod
     def _validate_pad(pad: object) -> None:
@@ -205,8 +205,8 @@ class RenderConfig:
             raise TypeError("pad must be a non-negative integer")
         if pad < 0:
             raise ValueError("pad must be a non-negative integer")
-        if pad > RenderConfig._MAX_PAD_PX:
-            raise ValueError(f"pad must be at most {RenderConfig._MAX_PAD_PX}")
+        if pad > TextRenderConfig._MAX_PAD_PX:
+            raise ValueError(f"pad must be at most {TextRenderConfig._MAX_PAD_PX}")
 
     @staticmethod
     def _validate_color(color: object, name: str) -> None:
@@ -227,7 +227,7 @@ class RenderConfig:
 
     @staticmethod
     def _parse_color(color: ColorLike, name: str) -> tuple[int, int, int, int]:
-        RenderConfig._validate_color(color, name)
+        TextRenderConfig._validate_color(color, name)
         if isinstance(color, str):
             try:
                 return ImageColor.getcolor(color, "RGBA")
@@ -245,7 +245,7 @@ class RenderConfig:
 
     @staticmethod
     def _parse_align(align: str) -> TextAlign:
-        RenderConfig._validate_align(align)
+        TextRenderConfig._validate_align(align)
         return align.lower()
 
     @staticmethod
@@ -364,7 +364,7 @@ class TextRenderer:
     def __init__(
         self,
         text: str,
-        config: RenderConfig | None = None,
+        config: TextRenderConfig | None = None,
         *,
         size_px: int | None = None,
         fg_color: ColorLike | None = None,
@@ -417,17 +417,17 @@ class TextRenderer:
         return f"{type(self).__name__}(len={len(self._text)})"
 
     @classmethod
-    def from_config(
+    def load_config(
         cls,
         text: str,
-        config: RenderConfig | dict[str, object] | PathLike,
+        config: TextRenderConfig | dict[str, object] | PathLike,
         *,
         section: str = "render",
     ) -> "TextRenderer":
-        return cls(text, RenderConfig.from_config(config, section=section))
+        return cls(text, TextRenderConfig.load_config(config, section=section))
 
     def _validate_font_coverage(self) -> None:
-        cmaps = self._config_cmaps
+        cmaps = self._cmaps
         all_supported = frozenset().union(*(cmaps.values()))
 
         for char in self._text:
@@ -522,12 +522,12 @@ class TextRenderer:
 
     @staticmethod
     def _validate_config(config: object) -> None:
-        if not isinstance(config, RenderConfig):
-            raise TypeError("config must be a RenderConfig")
+        if not isinstance(config, TextRenderConfig):
+            raise TypeError("config must be a TextRenderConfig")
 
     @staticmethod
     def _resolve_config(
-        config: RenderConfig | None,
+        config: TextRenderConfig | None,
         *,
         size_px: int | None,
         fg_color: ColorLike | None,
@@ -539,7 +539,7 @@ class TextRenderer:
         dpi: int,
         pad: int,
         align: TextAlign,
-    ) -> RenderConfig:
+    ) -> TextRenderConfig:
         explicit_values = {
             "size_px": size_px,
             "fg_color": fg_color,
@@ -553,11 +553,11 @@ class TextRenderer:
             TextRenderer._validate_config(config)
             if any(value is not None for value in explicit_values.values()):
                 raise TypeError(
-                    "explicit render options cannot be passed with RenderConfig"
+                    "explicit render options cannot be passed with TextRenderConfig"
                 )
             if dpi != 300 or pad != 24 or align != "left":
                 raise TypeError(
-                    "dpi, pad, and align cannot be passed with RenderConfig"
+                    "dpi, pad, and align cannot be passed with TextRenderConfig"
                 )
             return config
 
@@ -571,7 +571,7 @@ class TextRenderer:
                 "missing required render options: " + ", ".join(sorted(missing))
             )
 
-        return RenderConfig(
+        return TextRenderConfig(
             size_px=size_px,
             fg_color=fg_color,
             bg_color=bg_color,
@@ -592,7 +592,27 @@ class TextRenderer:
         return self._build_runs_for_text(text, slots)
 
     def _select_slots_for_text(self, text: str) -> list[FontSlot]:
-        return [self._detect_raw_slot(char) for char in text]
+        return [self._select_slot_for_char(char) for char in text]
+
+    def _select_slot_for_char(self, char: str) -> FontSlot:
+        raw_slot = self._detect_raw_slot(char)
+        codepoint = ord(char)
+        if codepoint in self._cmaps[raw_slot]:
+            return raw_slot
+        for slot in self._fallback_slots(raw_slot):
+            if codepoint in self._cmaps[slot]:
+                return slot
+        return raw_slot
+
+    @staticmethod
+    def _fallback_slots(raw_slot: FontSlot) -> tuple[FontSlot, ...]:
+        if raw_slot == "emoji":
+            return ("symbol", "cjk", "lgc")
+        if raw_slot == "symbol":
+            return ("cjk", "emoji", "lgc")
+        if raw_slot == "cjk":
+            return ("symbol", "emoji", "lgc")
+        return ("symbol", "cjk", "emoji")
 
     def _check_glyphs_for_text(self, text: str, slots: list[FontSlot]) -> None:
         if missing := next(

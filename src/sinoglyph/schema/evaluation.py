@@ -65,7 +65,7 @@ class PromptConfig:
     image_prompt: str
 
     @classmethod
-    def from_mapping(cls, mapping: object, context: str = "prompt") -> "PromptConfig":
+    def parse_mapping(cls, mapping: object, context: str = "prompt") -> "PromptConfig":
         raw = require_mapping(mapping, context)
         require_keys(raw, {"system_prompt", "text_prompt", "image_prompt"}, context)
         return cls(
@@ -76,7 +76,7 @@ class PromptConfig:
             image_prompt=require_string(raw["image_prompt"], f"{context}.image_prompt"),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "system_prompt": self.system_prompt,
             "text_prompt": self.text_prompt,
@@ -92,7 +92,7 @@ class EvaluationTask:
     name: str
 
     @classmethod
-    def from_mapping(cls, mapping: object, context: str = "task") -> "EvaluationTask":
+    def parse_mapping(cls, mapping: object, context: str = "task") -> "EvaluationTask":
         raw = require_mapping(mapping, context)
         require_keys(raw, {"input_type", "source", "variant"}, context)
         input_type = require_enum(InputType, raw["input_type"], f"{context}.input_type")
@@ -108,7 +108,7 @@ class EvaluationTask:
         )
         return cls(input_type=input_type, source=source, variant=variant, name=name)
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "name": self.name,
             "input_type": self.input_type.value,
@@ -122,12 +122,12 @@ class EvaluationSettings:
     name: str
     corpus_path: str
     output_dir: str
-    limit: int
+    limit: int | None
     cache_dir: str
     n_jobs: int
 
     @classmethod
-    def from_mapping(
+    def parse_mapping(
         cls,
         mapping: object,
         context: str = "evaluation",
@@ -137,13 +137,18 @@ class EvaluationSettings:
             raise ValueError(
                 f"{context}.attempts has been removed; use llm.max_retries instead"
             )
-        require_keys(raw, {"name", "corpus_path", "output_dir", "limit"}, context)
+        require_keys(raw, {"name", "corpus_path", "output_dir"}, context)
         name = require_string(raw["name"], f"{context}.name")
+        raw_limit = raw.get("limit")
         return cls(
             name=name,
             corpus_path=require_string(raw["corpus_path"], f"{context}.corpus_path"),
             output_dir=require_string(raw["output_dir"], f"{context}.output_dir"),
-            limit=require_positive_integer(raw["limit"], f"{context}.limit"),
+            limit=(
+                None
+                if raw_limit is None
+                else require_positive_integer(raw_limit, f"{context}.limit")
+            ),
             cache_dir=require_string(
                 raw.get("cache_dir", f"cache/{name}"),
                 f"{context}.cache_dir",
@@ -154,15 +159,17 @@ class EvaluationSettings:
             ),
         )
 
-    def to_mapping(self) -> JsonObject:
-        return {
+    def export_mapping(self) -> JsonObject:
+        output: JsonObject = {
             "name": self.name,
             "corpus_path": self.corpus_path,
             "output_dir": self.output_dir,
-            "limit": self.limit,
             "cache_dir": self.cache_dir,
             "n_jobs": self.n_jobs,
         }
+        if self.limit is not None:
+            output["limit"] = self.limit
+        return output
 
 
 @dataclass(frozen=True)
@@ -175,12 +182,12 @@ class EvaluationConfig:
     render: JsonObject | None = None
 
     @classmethod
-    def from_mapping(cls, mapping: object) -> "EvaluationConfig":
+    def parse_mapping(cls, mapping: object) -> "EvaluationConfig":
         raw = require_mapping(mapping, "config")
         require_keys(raw, {"evaluation", "llm", "prompt", "tasks"}, "config")
-        evaluation = EvaluationSettings.from_mapping(raw["evaluation"])
+        evaluation = EvaluationSettings.parse_mapping(raw["evaluation"])
         llm = _normalize_llm(raw["llm"])
-        prompt = PromptConfig.from_mapping(raw["prompt"])
+        prompt = PromptConfig.parse_mapping(raw["prompt"])
         response_schema = _normalize_response_schema(raw.get("response"))
         tasks = _normalize_tasks(raw["tasks"])
         render = None
@@ -198,22 +205,22 @@ class EvaluationConfig:
         )
 
     @classmethod
-    def from_toml(cls, file_path: PathLike) -> "EvaluationConfig":
-        return cls.from_mapping(load_toml(file_path))
+    def load_toml(cls, file_path: PathLike) -> "EvaluationConfig":
+        return cls.parse_mapping(load_toml(file_path))
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         output: JsonObject = {
-            "evaluation": self.evaluation.to_mapping(),
+            "evaluation": self.evaluation.export_mapping(),
             "llm": dict(self.llm),
-            "prompt": self.prompt.to_mapping(),
+            "prompt": self.prompt.export_mapping(),
             "response": {"schema": dict(self.response_schema)},
-            "tasks": [task.to_mapping() for task in self.tasks],
+            "tasks": [task.export_mapping() for task in self.tasks],
         }
         if self.render is not None:
             output["render"] = dict(self.render)
         return output
 
-    def fingerprint(self) -> str:
+    def compute_fingerprint(self) -> str:
         render = None
         if self.render is not None:
             render = {
@@ -230,10 +237,10 @@ class EvaluationConfig:
         payload: JsonObject = {
             "corpus": {"sha256": _file_sha256(self.evaluation.corpus_path)},
             "limit": self.evaluation.limit,
-            "llm": self.resolved_llm_public_fingerprint_config(),
-            "prompt": self.prompt.to_mapping(),
+            "llm": self.resolve_fingerprint_llm_config(),
+            "prompt": self.prompt.export_mapping(),
             "response": {"schema": self.response_schema},
-            "tasks": [task.to_mapping() for task in self.tasks],
+            "tasks": [task.export_mapping() for task in self.tasks],
         }
         if render is not None:
             payload["render"] = render
@@ -242,20 +249,20 @@ class EvaluationConfig:
         )
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def result_meta(self) -> JsonObject:
+    def build_result_meta(self) -> JsonObject:
         meta: JsonObject = {
-            "fingerprint": self.fingerprint(),
+            "fingerprint": self.compute_fingerprint(),
             "name": self.evaluation.name,
             "corpus_path": self.evaluation.corpus_path,
-            "llm": self.resolved_llm_public_config(),
-            "prompt": self.prompt.to_mapping(),
+            "llm": self.resolve_public_llm_config(),
+            "prompt": self.prompt.export_mapping(),
             "response": {"schema": self.response_schema},
         }
         if self.render is not None:
             meta["render"] = dict(self.render)
         return meta
 
-    def resolved_llm_public_config(self) -> JsonObject:
+    def resolve_public_llm_config(self) -> JsonObject:
         llm = dict(self.llm)
         _resolve_env_value(llm, "base_url", "base_url_env")
         _resolve_env_value(llm, "model", "model_env")
@@ -265,22 +272,22 @@ class EvaluationConfig:
             if key not in {"api_key", "api_key_env", "base_url_env", "model_env"}
         }
 
-    def resolved_llm_public_fingerprint_config(self) -> JsonObject:
-        llm = self.resolved_llm_public_config()
+    def resolve_fingerprint_llm_config(self) -> JsonObject:
+        llm = self.resolve_public_llm_config()
         llm.pop("timeout", None)
         return llm
 
-    def resolved_llm_client_config(self) -> JsonObject:
+    def resolve_client_llm_config(self) -> JsonObject:
         llm = dict(self.llm)
         _resolve_env_value(llm, "base_url", "base_url_env")
         _resolve_env_value(llm, "model", "model_env")
         _resolve_env_value(llm, "api_key", "api_key_env")
         return llm
 
-    def llm_client_config(self, api_key: str | None = None) -> Any:
-        from sinoglyph.llm import LLMClientConfig
+    def create_chat_config(self, api_key: str | None = None) -> Any:
+        from sinoglyph.llm import ChatClientConfig
 
-        llm = self.resolved_llm_client_config()
+        llm = self.resolve_client_llm_config()
         resolved_api_key = (
             api_key
             if api_key is not None
@@ -294,13 +301,13 @@ class EvaluationConfig:
             for key, value in llm.items()
             if key not in {"api_key", "api_key_env", "base_url_env", "model_env"}
         }
-        return LLMClientConfig(
+        return ChatClientConfig(
             api_key=resolved_api_key,
             system=self.prompt.system_prompt,
             **options,
         )
 
-    def render_runtime_mapping(self) -> JsonObject | None:
+    def build_render_config_mapping(self) -> JsonObject | None:
         if self.render is None:
             return None
         return {
@@ -317,7 +324,7 @@ class EvaluationResult:
     corpus: list[JsonObject]
 
     @classmethod
-    def from_mapping(cls, mapping: object) -> "EvaluationResult":
+    def parse_mapping(cls, mapping: object) -> "EvaluationResult":
         raw = require_mapping(mapping, "result")
         require_keys(raw, {"meta", "tasks", "corpus"}, "result")
         tasks = _normalize_tasks(raw["tasks"])
@@ -341,10 +348,10 @@ class EvaluationResult:
         ]
         return cls(meta=meta, tasks=tasks, corpus=corpus)
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "meta": dict(self.meta),
-            "tasks": [task.to_mapping() for task in self.tasks],
+            "tasks": [task.export_mapping() for task in self.tasks],
             "corpus": [dict(entry) for entry in self.corpus],
         }
 
@@ -370,7 +377,7 @@ def validate_response_instance(
 
 def _normalize_tasks(raw_tasks: object) -> list[EvaluationTask]:
     tasks = [
-        EvaluationTask.from_mapping(raw_task, f"tasks[{index}]")
+        EvaluationTask.parse_mapping(raw_task, f"tasks[{index}]")
         for index, raw_task in enumerate(require_list(raw_tasks, "tasks"))
     ]
     if not tasks:
@@ -489,7 +496,7 @@ def _validate_meta(raw_meta: object, tasks: list[EvaluationTask]) -> JsonObject:
     require_string(meta["name"], "meta.name")
     require_string(meta["corpus_path"], "meta.corpus_path")
     _normalize_llm(meta["llm"], public=True)
-    PromptConfig.from_mapping(meta["prompt"], "meta.prompt")
+    PromptConfig.parse_mapping(meta["prompt"], "meta.prompt")
     _normalize_response_schema(meta["response"])
     if "render" in meta:
         _normalize_render(meta["render"])
@@ -508,7 +515,7 @@ def _validate_result_entry(
     context = f"corpus[{entry_index}]"
     entry = dict(require_mapping(raw_entry, context))
     require_keys(entry, {"id", "text", "expected_label", "results"}, context)
-    model = PerturbedCorpusEntry.from_mapping(entry, context)
+    model = PerturbedCorpusEntry.parse_mapping(entry, context)
     results = require_list(entry["results"], f"{context}.results")
     result_task_names: set[str] = set()
     for result_index, raw_result in enumerate(results):
@@ -557,9 +564,9 @@ def _validate_task_result(
     task = task_by_name[task_name]
     expected_input = entry.input_text(task.source.value, task.variant)
     if task.input_type == InputType.IMAGE:
-        from sinoglyph.flow.evaluate import apply_task_line_breaks
+        from sinoglyph.evaluate.text import wrap_task_input
 
-        expected_input = apply_task_line_breaks(entry, task, expected_input, render)
+        expected_input = wrap_task_input(entry, task, expected_input, render)
     if result["input_text"] != expected_input:
         raise ValueError(f"{context}.input_text does not match task input")
     expected_fraction = entry.substitution_fraction(task.source.value, task.variant)

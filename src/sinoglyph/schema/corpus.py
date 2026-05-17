@@ -24,7 +24,7 @@ class SubstitutionRecord:
     perturbation: str
 
     @classmethod
-    def from_mapping(cls, mapping: object, context: str) -> "SubstitutionRecord":
+    def parse_mapping(cls, mapping: object, context: str) -> "SubstitutionRecord":
         raw = require_mapping(mapping, context)
         require_keys(raw, {"character", "decomposition", "perturbation"}, context)
         return cls(
@@ -35,7 +35,7 @@ class SubstitutionRecord:
             perturbation=require_string(raw["perturbation"], f"{context}.perturbation"),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "character": self.character,
             "decomposition": self.decomposition,
@@ -51,7 +51,7 @@ class CorpusEntry:
     semantic_anchors: list[JsonObject]
 
     @classmethod
-    def from_mapping(
+    def parse_mapping(
         cls, mapping: object, context: str = "corpus entry"
     ) -> "CorpusEntry":
         raw = require_mapping(mapping, context)
@@ -71,7 +71,7 @@ class CorpusEntry:
             ),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         return {
             "id": self.id,
             "text": self.text,
@@ -95,13 +95,13 @@ class PerturbedCorpusEntry(CorpusEntry):
     perturbation: dict[TaskVariant, str]
 
     @classmethod
-    def from_mapping(
+    def parse_mapping(
         cls,
         mapping: object,
         context: str = "perturbed corpus entry",
     ) -> "PerturbedCorpusEntry":
         raw = require_mapping(mapping, context)
-        base = CorpusEntry.from_mapping(raw, context)
+        base = CorpusEntry.parse_mapping(raw, context)
         require_keys(raw, {"substitutions", "decomposition", "perturbation"}, context)
         return cls(
             id=base.id,
@@ -117,7 +117,7 @@ class PerturbedCorpusEntry(CorpusEntry):
             perturbation=_variant_texts(raw["perturbation"], f"{context}.perturbation"),
         )
 
-    def to_mapping(self) -> JsonObject:
+    def export_mapping(self) -> JsonObject:
         output = self._base_mapping()
         output.update(
             {
@@ -129,7 +129,7 @@ class PerturbedCorpusEntry(CorpusEntry):
         return output
 
     def _base_mapping(self) -> JsonObject:
-        return super().to_mapping()
+        return super().export_mapping()
 
     def input_text(self, source: str, variant: TaskVariant) -> str:
         if source == "text":
@@ -163,19 +163,19 @@ def save_annotated_corpus(corpus: list[CorpusEntry], file_path: PathLike) -> Non
 def save_perturbed_corpus(
     corpus: list[PerturbedCorpusEntry], file_path: PathLike
 ) -> None:
-    save_json([entry.to_mapping() for entry in corpus], file_path)
+    save_json([entry.export_mapping() for entry in corpus], file_path)
 
 
 def parse_annotated_corpus(data: object) -> list[CorpusEntry]:
     return [
-        CorpusEntry.from_mapping(entry, f"AnnotatedCorpus[{index}]")
+        CorpusEntry.parse_mapping(entry, f"AnnotatedCorpus[{index}]")
         for index, entry in enumerate(require_list(data, "AnnotatedCorpus"))
     ]
 
 
 def parse_perturbed_corpus(data: object) -> list[PerturbedCorpusEntry]:
     return [
-        PerturbedCorpusEntry.from_mapping(entry, f"PerturbedCorpus[{index}]")
+        PerturbedCorpusEntry.parse_mapping(entry, f"PerturbedCorpus[{index}]")
         for index, entry in enumerate(require_list(data, "PerturbedCorpus"))
     ]
 
@@ -220,19 +220,19 @@ def _substitutions(value: object, context: str) -> JsonObject:
     raw = require_mapping(value, context)
     require_keys(raw, {"anchor", "non_anchor", "fraction"}, context)
     anchor = [
-        record.to_mapping()
+        record.export_mapping()
         for index, record in enumerate(require_list(raw["anchor"], f"{context}.anchor"))
         for record in [
-            SubstitutionRecord.from_mapping(record, f"{context}.anchor[{index}]")
+            SubstitutionRecord.parse_mapping(record, f"{context}.anchor[{index}]")
         ]
     ]
     non_anchor = [
-        record.to_mapping()
+        record.export_mapping()
         for index, record in enumerate(
             require_list(raw["non_anchor"], f"{context}.non_anchor")
         )
         for record in [
-            SubstitutionRecord.from_mapping(record, f"{context}.non_anchor[{index}]")
+            SubstitutionRecord.parse_mapping(record, f"{context}.non_anchor[{index}]")
         ]
     ]
     fraction = _variant_fractions(raw["fraction"], f"{context}.fraction")

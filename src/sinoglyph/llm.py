@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from sinoglyph.io import PathLike, load_toml, parse_json_response
 
 
-class LLMClientConfig:
+class ChatClientConfig:
     def __init__(
         self,
         *,
@@ -42,26 +42,26 @@ class LLMClientConfig:
         )
 
     @classmethod
-    def from_dict(cls, mapping: dict[str, Any]) -> "LLMClientConfig":
+    def parse_dict(cls, mapping: dict[str, Any]) -> "ChatClientConfig":
         if not isinstance(mapping, dict):
-            raise TypeError("LLMClientConfig.from_dict expects a mapping")
+            raise TypeError("ChatClientConfig.parse_dict expects a mapping")
         if "retries" in mapping:
             raise TypeError("retries has been removed; use max_retries instead")
         return cls(**mapping)
 
     @classmethod
-    def from_config(
+    def load_config(
         cls,
-        config: "LLMClientConfig | dict[str, Any] | PathLike",
+        config: "ChatClientConfig | dict[str, Any] | PathLike",
         *,
         section: str = "llm",
-    ) -> "LLMClientConfig":
+    ) -> "ChatClientConfig":
         if isinstance(config, cls):
             return config
         mapping = cls._load_config_mapping(config, section)
-        return cls.from_dict(mapping)
+        return cls.parse_dict(mapping)
 
-    def to_dict(self) -> dict[str, Any]:
+    def export_dict(self) -> dict[str, Any]:
         data = {
             "base_url": self._base_url,
             "api_key": self._api_key,
@@ -166,10 +166,10 @@ class LLMClientConfig:
         return mapping
 
 
-class LLMClient:
+class ChatClient:
     def __init__(
         self,
-        base_url: str | LLMClientConfig,
+        base_url: str | ChatClientConfig,
         api_key: str | None = None,
         model: str | None = None,
         system: str | None = None,
@@ -181,23 +181,23 @@ class LLMClient:
             from openai import OpenAI
         except ImportError as exc:
             raise ImportError(
-                "The openai package is required. Install it before using LLMClient."
+                "The openai package is required. Install it before using ChatClient."
             ) from exc
 
-        if isinstance(base_url, LLMClientConfig):
+        if isinstance(base_url, ChatClientConfig):
             if api_key is not None or model is not None or system is not None:
                 raise TypeError(
-                    "api_key, model, and system cannot be passed with LLMClientConfig"
+                    "api_key, model, and system cannot be passed with ChatClientConfig"
                 )
             if timeout is not None or max_retries is not None:
                 raise TypeError(
-                    "timeout and max_retries cannot be passed with LLMClientConfig"
+                    "timeout and max_retries cannot be passed with ChatClientConfig"
                 )
             if request_options:
-                raise TypeError("request options cannot be passed with LLMClientConfig")
+                raise TypeError("request options cannot be passed with ChatClientConfig")
             config = base_url
         else:
-            config = LLMClientConfig(
+            config = ChatClientConfig(
                 base_url=base_url,
                 api_key="" if api_key is None else api_key,
                 model="" if model is None else model,
@@ -226,13 +226,13 @@ class LLMClient:
             self.set_system(config.system)
 
     @classmethod
-    def from_config(
+    def load_config(
         cls,
-        config: LLMClientConfig | dict[str, Any] | PathLike,
+        config: ChatClientConfig | dict[str, Any] | PathLike,
         *,
         section: str = "llm",
-    ) -> "LLMClient":
-        return cls(LLMClientConfig.from_config(config, section=section))
+    ) -> "ChatClient":
+        return cls(ChatClientConfig.load_config(config, section=section))
 
     @property
     def base_url(self) -> str:
