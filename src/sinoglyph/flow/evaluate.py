@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -10,11 +11,17 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from time import sleep, time
-from typing import cast
+from typing import TYPE_CHECKING, Iterator, cast
 
 from tqdm.auto import tqdm
 
-from sinoglyph.io import PathLike, load_env_file, load_json, save_json
+from sinoglyph.io import (
+    PathLike,
+    load_env_file,
+    load_json,
+    parse_json_response,
+    save_json,
+)
 from sinoglyph.schema.base import JsonObject
 from sinoglyph.schema.corpus import PerturbedCorpusEntry, load_perturbed_corpus
 from sinoglyph.schema.evaluation import (
@@ -25,6 +32,10 @@ from sinoglyph.schema.evaluation import (
 )
 from sinoglyph.schema.types import InputType, ModerationLabel, TaskSource, TaskVariant
 from sinoglyph.schema.utils import require_list, require_mapping, require_string
+
+if TYPE_CHECKING:
+    from sinoglyph.llm import LLMClient
+    from sinoglyph.render import RenderConfig
 
 
 @dataclass(frozen=True)
@@ -37,6 +48,15 @@ class EvaluationJob:
 class EvaluationJobResult:
     index: int
     entry: JsonObject
+
+
+@dataclass(frozen=True)
+class EvaluationFailure:
+    kind: str
+    retryable: bool
+    message: str
+    status_code: int | None = None
+    request_id: str | None = None
 
 
 def run_evaluation(
@@ -57,12 +77,16 @@ def run_evaluation(
     if resolved_n_jobs <= 0:
         raise ValueError("n_jobs must be a positive integer")
     _prepare_cache_dir(resolved_cache_dir)
+    cache = EvaluationCache(resolved_cache_dir, fingerprint)
 
     corpus = load_perturbed_corpus(settings.corpus_path)
     limited_corpus = [entry.to_mapping() for entry in corpus[: settings.limit]]
 
-    with _cache_run_lock(resolved_cache_dir, fingerprint):
+    with cache.run_lock():
         llm_config = config.llm_client_config().to_dict()
+        max_retries = cast(int, llm_config.get("max_retries", 0))
+        max_tries = max_retries + 1
+        llm_config["max_retries"] = 0
         tasks = config.tasks
         needs_render = any(task.input_type == InputType.IMAGE for task in tasks)
         render_mapping = config.render if needs_render else None
@@ -77,12 +101,7 @@ def run_evaluation(
         resumed_entries = 0
         for index, entry in enumerate(limited_corpus):
             entry_id = require_string(entry["id"], "entry.id")
-            cached = _load_cached_checkpoint(
-                _cache_entry_path(resolved_cache_dir, index, entry_id),
-                index,
-                entry_id,
-                fingerprint,
-            )
+            cached = cache.load_entry(index, entry_id)
             entry = _entry_with_cached_results(entry, cached, meta, tasks)
             if entry.get("results"):
                 resumed_entries += 1
@@ -112,7 +131,7 @@ def run_evaluation(
                 worker(
                     job,
                     tasks,
-                    settings.attempts,
+                    max_tries,
                     llm_config,
                     prompt.text_prompt,
                     prompt.image_prompt,
@@ -152,7 +171,7 @@ def run_evaluation(
 
 
 def parse_evaluation_response(raw: str, response_schema: JsonObject) -> JsonObject:
-    parsed = json.loads(_strip_json_markdown_fence(raw))
+    parsed = parse_json_response(raw)
     try:
         return validate_response_instance(parsed, response_schema)
     except ValueError as exc:
@@ -196,7 +215,7 @@ def apply_task_line_breaks(
 def _evaluate_corpus_entry(
     job: EvaluationJob,
     tasks: list[EvaluationTask],
-    attempts: int,
+    max_tries: int,
     llm_config: dict[str, object],
     text_prompt: str,
     image_prompt: str,
@@ -209,7 +228,7 @@ def _evaluate_corpus_entry(
     from sinoglyph.llm import LLMClient, LLMClientConfig
     from sinoglyph.render import RenderConfig
 
-    client = LLMClient(LLMClientConfig.from_dict(llm_config))
+    cache = EvaluationCache(cache_dir, fingerprint)
     render_config = (
         None
         if render_runtime_mapping is None
@@ -226,8 +245,8 @@ def _evaluate_corpus_entry(
             results_by_task_name[task.name] = _evaluate_task(
                 entry,
                 task,
-                attempts,
-                client,
+                max_tries,
+                llm_config,
                 _prompt_with_response_contract(text_prompt, response_contract),
                 _prompt_with_response_contract(image_prompt, response_contract),
                 response_schema,
@@ -236,17 +255,21 @@ def _evaluate_corpus_entry(
                 cache_dir,
             )
             entry["results"] = _ordered_results(results_by_task_name, tasks)
-            _save_cached_entry(entry, job.index, cache_path, fingerprint)
+            entry_id = require_string(entry["id"], "entry.id")
+            with cache.entry_lock(job.index, entry_id):
+                cache.save_entry(entry, job.index, cache_path)
     entry["results"] = _ordered_results(results_by_task_name, tasks)
-    _save_cached_entry(entry, job.index, cache_path, fingerprint)
+    entry_id = require_string(entry["id"], "entry.id")
+    with cache.entry_lock(job.index, entry_id):
+        cache.save_entry(entry, job.index, cache_path)
     return EvaluationJobResult(index=job.index, entry=entry)
 
 
 def _evaluate_task(
     entry: JsonObject,
     task: EvaluationTask,
-    attempts: int,
-    client: LLMClient,
+    max_tries: int,
+    llm_config: JsonObject,
     text_prompt: str,
     image_prompt: str,
     response_schema: JsonObject,
@@ -254,6 +277,9 @@ def _evaluate_task(
     render_config: RenderConfig | None,
     cache_dir: Path,
 ) -> JsonObject:
+    from sinoglyph.llm import LLMClient, LLMClientConfig
+
+    client = LLMClient(LLMClientConfig.from_dict(llm_config))
     corpus_entry = PerturbedCorpusEntry.from_mapping(entry)
     raw_input_text = corpus_entry.input_text(task.source.value, task.variant)
     input_text = (
@@ -265,11 +291,12 @@ def _evaluate_task(
         task.source.value, task.variant
     )
     raw = ""
-    parse_error = None
-    request_error = None
+    parse_error: str | None = None
+    request_error: str | None = None
+    failure: EvaluationFailure | None = None
     parsed = None
     predicted_label = None
-    attempt_count = 0
+    try_count = 0
     image_path = None
     if task.input_type == InputType.IMAGE:
         if render_config is None:
@@ -278,8 +305,8 @@ def _evaluate_task(
             cache_dir, corpus_entry, task, input_text, render_config
         )
 
-    for attempt in range(1, attempts + 1):
-        attempt_count = attempt
+    for try_index in range(1, max_tries + 1):
+        try_count = try_index
         client.clear(keep_system=True)
         try:
             if task.input_type == InputType.TEXT:
@@ -296,37 +323,41 @@ def _evaluate_task(
                     ),
                 )
         except Exception as exc:
-            request_error = str(exc)
+            failure = _classify_request_error(exc)
+            request_error = failure.message
             parse_error = None
-            if attempt < attempts:
+            if failure.retryable and try_index < max_tries:
                 sleep(1)
-            continue
+                continue
+            break
 
         try:
             parsed = parse_evaluation_response(raw, response_schema)
         except ValueError as exc:
-            parse_error = str(exc)
+            failure = _classify_response_error(exc)
+            parse_error = failure.message
             request_error = None
-            if attempt < attempts:
+            if try_index < max_tries:
+                sleep(1)
+            continue
+
+        if parsed is None:
+            parse_error = "Response schema validation failed"
+            request_error = None
+            if try_index < max_tries:
                 sleep(1)
             continue
 
         parse_error = None
         request_error = None
+        failure = None
         predicted_label = ModerationLabel.from_value(
             parsed["judge"], "response.judge"
         ).value
         break
 
-    if parsed is None and parse_error is not None:
-        raise ValueError(
-            f"{task.name} response JSON did not match schema after "
-            f"{attempt_count} attempt(s): {parse_error}"
-        )
-
     if request_error is not None and not raw:
         raw = "<request_error>"
-        parse_error = request_error
     elif not raw:
         raw = "<empty_response>"
 
@@ -341,33 +372,62 @@ def _evaluate_task(
             if predicted_label is None
             else corpus_entry.expected_label.value == predicted_label
         ),
-        "attempt_count": attempt_count,
+        "try_count": try_count,
         "request_error": request_error,
+        "failure_kind": None if failure is None else failure.kind,
+        "status_code": None if failure is None else failure.status_code,
+        "request_id": None if failure is None else failure.request_id,
     }
 
 
-def _load_cached_checkpoint(
-    cache_path: Path,
-    index: int,
-    entry_id: str,
-    fingerprint: str,
-) -> JsonObject | None:
-    if not cache_path.is_file():
-        return None
-    try:
-        cached = load_json(cache_path)
-    except Exception:
-        return None
-    if not isinstance(cached, dict):
-        return None
-    if cached.get("fingerprint") != fingerprint:
-        return None
-    if cached.get("index") != index:
-        return None
-    entry = cached.get("entry")
-    if not isinstance(entry, dict) or entry.get("id") != entry_id:
-        return None
-    return entry
+class EvaluationCache:
+    def __init__(self, cache_dir: Path, fingerprint: str) -> None:
+        self.cache_dir = cache_dir
+        self.fingerprint = fingerprint
+
+    def entry_path(self, index: int, entry_id: str) -> Path:
+        return _cache_entry_path(self.cache_dir, index, entry_id)
+
+    def load_entry(self, index: int, entry_id: str) -> JsonObject | None:
+        cache_path = self.entry_path(index, entry_id)
+        if not cache_path.is_file():
+            return None
+        try:
+            cached = load_json(cache_path)
+        except Exception:
+            return None
+        if not isinstance(cached, dict):
+            return None
+        if cached.get("fingerprint") != self.fingerprint:
+            return None
+        if cached.get("index") != index:
+            return None
+        entry = cached.get("entry")
+        if not isinstance(entry, dict) or entry.get("id") != entry_id:
+            return None
+        return entry
+
+    def save_entry(self, entry: JsonObject, index: int, cache_path: Path) -> None:
+        save_json(
+            {
+                "fingerprint": self.fingerprint,
+                "index": index,
+                "entry": entry,
+            },
+            cache_path,
+            warn_overwrite=False,
+        )
+
+    @contextmanager
+    def run_lock(self) -> Iterator[None]:
+        with _cache_run_lock(self.cache_dir, self.fingerprint):
+            yield
+
+    @contextmanager
+    def entry_lock(self, index: int, entry_id: str) -> Iterator[None]:
+        """Acquire per-entry lock to prevent concurrent writes to the same entry."""
+        with _cache_entry_lock(self.cache_dir, index, entry_id):
+            yield
 
 
 def _entry_with_cached_results(
@@ -413,6 +473,7 @@ def _cached_result_is_reusable(result: JsonObject) -> bool:
         and isinstance(response.get("parsed"), dict)
         and response.get("parse_error") is None
         and result.get("request_error") is None
+        and result.get("failure_kind") is None
         and isinstance(result.get("predicted_label"), str)
     )
 
@@ -474,23 +535,6 @@ def _ordered_results(
     ]
 
 
-def _save_cached_entry(
-    entry: JsonObject,
-    index: int,
-    cache_path: Path,
-    fingerprint: str,
-) -> None:
-    save_json(
-        {
-            "fingerprint": fingerprint,
-            "index": index,
-            "entry": entry,
-        },
-        cache_path,
-        warn_overwrite=False,
-    )
-
-
 def _text_message(prompt: str, input_text: str) -> str:
     return f"{prompt.rstrip()}\n\n<INPUT_TEXT>\n{input_text}\n</INPUT_TEXT>"
 
@@ -537,16 +581,92 @@ def _response_contract(response_schema: JsonObject) -> str:
     return "\n".join(lines)
 
 
-def _strip_json_markdown_fence(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    lines = stripped.splitlines()
-    if len(lines) >= 2 and lines[0].strip().startswith("```"):
-        last_line = lines[-1].strip()
-        if last_line == "```":
-            return "\n".join(lines[1:-1]).strip()
-    return stripped
+def _classify_response_error(exc: Exception) -> EvaluationFailure:
+    if isinstance(exc, json.JSONDecodeError):
+        return EvaluationFailure(
+            kind="invalid_json",
+            retryable=True,
+            message=str(exc),
+        )
+    return EvaluationFailure(
+        kind="schema_mismatch",
+        retryable=True,
+        message=str(exc),
+    )
+
+
+def _classify_request_error(exc: Exception) -> EvaluationFailure:
+    status_code = _exception_int_attr(exc, "status_code")
+    request_id = _exception_string_attr(exc, "request_id") or _exception_string_attr(
+        exc, "_request_id"
+    )
+    message = _sanitize_error_message(str(exc))
+    class_names = _exception_class_names(exc)
+
+    if _looks_like_no_quota(exc, message):
+        return EvaluationFailure("no_quota", False, message, status_code, request_id)
+    if "APITimeoutError" in class_names or any(
+        "Timeout" in name for name in class_names
+    ):
+        return EvaluationFailure("timeout", True, message, status_code, request_id)
+    if "AuthenticationError" in class_names or status_code == 401:
+        return EvaluationFailure("auth", False, message, status_code, request_id)
+    if "PermissionDeniedError" in class_names or status_code == 403:
+        return EvaluationFailure("permission", False, message, status_code, request_id)
+    if "RateLimitError" in class_names or status_code == 429:
+        return EvaluationFailure("rate_limit", True, message, status_code, request_id)
+    if "APIConnectionError" in class_names:
+        return EvaluationFailure("connection", True, message, status_code, request_id)
+    if status_code is not None:
+        if status_code >= 500:
+            return EvaluationFailure("server", True, message, status_code, request_id)
+        if status_code in {400, 422}:
+            return EvaluationFailure(
+                "bad_request", False, message, status_code, request_id
+            )
+    return EvaluationFailure("unknown", True, message, status_code, request_id)
+
+
+def _exception_class_names(exc: Exception) -> set[str]:
+    return {cls.__name__ for cls in type(exc).mro()}
+
+
+def _exception_int_attr(exc: Exception, name: str) -> int | None:
+    value = getattr(exc, name, None)
+    return value if isinstance(value, int) else None
+
+
+def _exception_string_attr(exc: Exception, name: str) -> str | None:
+    value = getattr(exc, name, None)
+    return value if isinstance(value, str) and value else None
+
+
+def _looks_like_no_quota(exc: Exception, message: str) -> bool:
+    haystack = " ".join(
+        part
+        for part in [
+            message,
+            str(getattr(exc, "code", "")),
+            str(getattr(exc, "type", "")),
+            str(getattr(exc, "body", "")),
+        ]
+        if part
+    ).lower()
+    return any(
+        marker in haystack
+        for marker in (
+            "insufficient_quota",
+            "exceeded your current quota",
+            "check your plan and billing",
+            "quota exceeded",
+            "billing",
+        )
+    )
+
+
+def _sanitize_error_message(message: str) -> str:
+    cleaned = " ".join(message.split())
+    return cleaned[:500] if cleaned else "<request_error>"
 
 
 def _render_task_image(
@@ -559,7 +679,9 @@ def _render_task_image(
     from sinoglyph.render import TextRenderer
 
     image_dir = cache_dir / "images" / _safe_name(entry.id)
-    image_path = image_dir / f"{_safe_task_image_name(task.name)}.png"
+    # Use hash of input_text for content-based deduplication
+    text_hash = hashlib.sha256(input_text.encode()).hexdigest()[:16]
+    image_path = image_dir / f"{text_hash}.png"
     TextRenderer(input_text, render_config).render(image_path)
     return image_path
 
@@ -696,6 +818,23 @@ def _cache_run_lock(cache_dir: Path, fingerprint: str):
         yield
     finally:
         lock_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _cache_entry_lock(cache_dir: Path, index: int, entry_id: str):
+    lock_filename = f".entry-{index}-{entry_id}.lock"
+    lock_path = cache_dir / lock_filename
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Open lock file (create if doesn't exist)
+    with open(lock_path, "w") as lock_file:
+        try:
+            # Acquire exclusive lock
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            # Release lock
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _cache_lock_is_stale(lock_path: Path) -> bool:

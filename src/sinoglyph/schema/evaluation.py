@@ -24,7 +24,7 @@ from sinoglyph.schema.utils import (
     require_string,
 )
 
-LLM_DEFAULTS: JsonObject = {"retries": 3, "timeout": 120, "temperature": 0}
+LLM_DEFAULTS: JsonObject = {"max_retries": 2, "timeout": 120, "temperature": 0}
 EVALUATION_DEFAULTS: JsonObject = {"n_jobs": 5}
 RENDER_DEFAULTS: JsonObject = {
     "line_breaks": False,
@@ -122,7 +122,6 @@ class EvaluationSettings:
     name: str
     corpus_path: str
     output_dir: str
-    attempts: int
     limit: int
     cache_dir: str
     n_jobs: int
@@ -134,15 +133,16 @@ class EvaluationSettings:
         context: str = "evaluation",
     ) -> "EvaluationSettings":
         raw = dict(require_mapping(mapping, context))
-        require_keys(
-            raw, {"name", "corpus_path", "output_dir", "attempts", "limit"}, context
-        )
+        if "attempts" in raw:
+            raise ValueError(
+                f"{context}.attempts has been removed; use llm.max_retries instead"
+            )
+        require_keys(raw, {"name", "corpus_path", "output_dir", "limit"}, context)
         name = require_string(raw["name"], f"{context}.name")
         return cls(
             name=name,
             corpus_path=require_string(raw["corpus_path"], f"{context}.corpus_path"),
             output_dir=require_string(raw["output_dir"], f"{context}.output_dir"),
-            attempts=require_positive_integer(raw["attempts"], f"{context}.attempts"),
             limit=require_positive_integer(raw["limit"], f"{context}.limit"),
             cache_dir=require_string(
                 raw.get("cache_dir", f"cache/{name}"),
@@ -159,7 +159,6 @@ class EvaluationSettings:
             "name": self.name,
             "corpus_path": self.corpus_path,
             "output_dir": self.output_dir,
-            "attempts": self.attempts,
             "limit": self.limit,
             "cache_dir": self.cache_dir,
             "n_jobs": self.n_jobs,
@@ -230,9 +229,8 @@ class EvaluationConfig:
             }
         payload: JsonObject = {
             "corpus": {"sha256": _file_sha256(self.evaluation.corpus_path)},
-            "attempts": self.evaluation.attempts,
             "limit": self.evaluation.limit,
-            "llm": self.resolved_llm_public_config(),
+            "llm": self.resolved_llm_public_fingerprint_config(),
             "prompt": self.prompt.to_mapping(),
             "response": {"schema": self.response_schema},
             "tasks": [task.to_mapping() for task in self.tasks],
@@ -249,7 +247,6 @@ class EvaluationConfig:
             "fingerprint": self.fingerprint(),
             "name": self.evaluation.name,
             "corpus_path": self.evaluation.corpus_path,
-            "attempts": self.evaluation.attempts,
             "llm": self.resolved_llm_public_config(),
             "prompt": self.prompt.to_mapping(),
             "response": {"schema": self.response_schema},
@@ -267,6 +264,11 @@ class EvaluationConfig:
             for key, value in llm.items()
             if key not in {"api_key", "api_key_env", "base_url_env", "model_env"}
         }
+
+    def resolved_llm_public_fingerprint_config(self) -> JsonObject:
+        llm = self.resolved_llm_public_config()
+        llm.pop("timeout", None)
+        return llm
 
     def resolved_llm_client_config(self) -> JsonObject:
         llm = dict(self.llm)
@@ -384,6 +386,8 @@ def _normalize_tasks(raw_tasks: object) -> list[EvaluationTask]:
 
 def _normalize_llm(raw_llm: object, *, public: bool = False) -> JsonObject:
     llm = dict(require_mapping(raw_llm, "llm"))
+    if "retries" in llm:
+        raise ValueError("llm.retries has been removed; use llm.max_retries instead")
     require_keys(
         llm,
         {"base_url", "max_tokens", "model"} if public else {"max_tokens"},
@@ -403,7 +407,9 @@ def _normalize_llm(raw_llm: object, *, public: bool = False) -> JsonObject:
         _require_exactly_one_string(llm, "model", "model_env", "llm")
     llm.update({key: llm.get(key, value) for key, value in LLM_DEFAULTS.items()})
     llm["max_tokens"] = require_positive_integer(llm["max_tokens"], "llm.max_tokens")
-    llm["retries"] = require_non_negative_integer(llm["retries"], "llm.retries")
+    llm["max_retries"] = require_non_negative_integer(
+        llm["max_retries"], "llm.max_retries"
+    )
     timeout = require_number(llm["timeout"], "llm.timeout")
     if timeout <= 0:
         raise ValueError("llm.timeout expects a positive number")
@@ -476,13 +482,12 @@ def _validate_meta(raw_meta: object, tasks: list[EvaluationTask]) -> JsonObject:
     meta = dict(require_mapping(raw_meta, "meta"))
     require_keys(
         meta,
-        {"fingerprint", "name", "corpus_path", "attempts", "llm", "prompt", "response"},
+        {"fingerprint", "name", "corpus_path", "llm", "prompt", "response"},
         "meta",
     )
     require_string(meta["fingerprint"], "meta.fingerprint")
     require_string(meta["name"], "meta.name")
     require_string(meta["corpus_path"], "meta.corpus_path")
-    require_positive_integer(meta["attempts"], "meta.attempts")
     _normalize_llm(meta["llm"], public=True)
     PromptConfig.from_mapping(meta["prompt"], "meta.prompt")
     _normalize_response_schema(meta["response"])
@@ -540,8 +545,9 @@ def _validate_task_result(
             "response",
             "predicted_label",
             "label_match",
-            "attempt_count",
+            "try_count",
             "request_error",
+            "failure_kind",
         },
         context,
     )
@@ -572,8 +578,13 @@ def _validate_task_result(
         False if predicted_label is None else predicted_label == entry.expected_label
     ):
         raise ValueError(f"{context}.label_match does not match labels")
-    require_positive_integer(result["attempt_count"], f"{context}.attempt_count")
+    require_positive_integer(result["try_count"], f"{context}.try_count")
     optional_string(result["request_error"], f"{context}.request_error")
+    optional_string(result["failure_kind"], f"{context}.failure_kind")
+    if "status_code" in result and result["status_code"] is not None:
+        require_positive_integer(result["status_code"], f"{context}.status_code")
+    if "request_id" in result:
+        optional_string(result["request_id"], f"{context}.request_id")
     response = require_mapping(result["response"], f"{context}.response")
     require_keys(response, {"raw", "parsed", "parse_error"}, f"{context}.response")
     require_string(response["raw"], f"{context}.response.raw")

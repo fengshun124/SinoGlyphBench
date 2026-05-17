@@ -19,6 +19,10 @@ FontSlot: TypeAlias = Literal["cjk", "lgc", "symbol", "emoji"]
 ColorLike: TypeAlias = str | tuple[int, int, int] | tuple[int, int, int, int]
 TextAlign: TypeAlias = Literal["left", "center", "right"]
 
+# Module-level caches to avoid reloading font data
+_CMAP_CACHE: dict[str, frozenset[int]] = {}
+_FONT_CACHE: dict[tuple[str, int], FreeTypeFont] = {}
+
 
 class RenderConfig:
     _MAX_SIZE_PX = 1024
@@ -91,7 +95,7 @@ class RenderConfig:
         mapping = cls._load_config_mapping(config, section)
         return cls.from_dict(mapping)
 
-    def export_dict(self) -> dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "size_px": self._size_px,
             "fg_color": self._fg_color,
@@ -104,9 +108,6 @@ class RenderConfig:
             "pad": self._pad,
             "align": self._align,
         }
-
-    def to_dict(self) -> dict[str, object]:
-        return self.export_dict()
 
     @property
     def size_px(self) -> int:
@@ -249,13 +250,22 @@ class RenderConfig:
 
     @staticmethod
     def _load_font(font_path: Path, size: int, name: str) -> FreeTypeFont:
+        cache_key = (str(font_path), size)
+        if cache_key in _FONT_CACHE:
+            return _FONT_CACHE[cache_key]
         try:
-            return ImageFont.truetype(str(font_path), size=size)
+            font = ImageFont.truetype(str(font_path), size=size)
+            _FONT_CACHE[cache_key] = font
+            return font
         except Exception as e:
             raise RuntimeError(f"{name} is not loadable by Pillow: {font_path}") from e
 
     @staticmethod
     def _load_cmap(font_path: Path, name: str) -> frozenset[int]:
+        cache_key = str(font_path)
+        if cache_key in _CMAP_CACHE:
+            return _CMAP_CACHE[cache_key]
+
         from fontTools.ttLib import TTCollection, TTFont
 
         obj = None
@@ -266,9 +276,11 @@ class RenderConfig:
             else:
                 obj = TTFont(str(font_path), lazy=True)
                 font = obj
-            return frozenset(
+            cmap = frozenset(
                 cp for t in font["cmap"].tables if t.isUnicode() for cp in t.cmap
             )
+            _CMAP_CACHE[cache_key] = cmap
+            return cmap
         except Exception as e:
             raise RuntimeError(
                 f"{name} does not expose a readable Unicode cmap: {font_path}"
@@ -414,7 +426,22 @@ class TextRenderer:
     ) -> "TextRenderer":
         return cls(text, RenderConfig.from_config(config, section=section))
 
+    def _validate_font_coverage(self) -> None:
+        cmaps = self._config_cmaps
+        all_supported = frozenset().union(*(cmaps.values()))
+
+        for char in self._text:
+            if char == "\n":
+                continue
+            cp = ord(char)
+            if cp not in all_supported:
+                raise ValueError(
+                    f"Character {char!r} (U+{cp:04X}) is not supported by any loaded font"
+                )
+
     def render(self, output_path: PathLike) -> PILImage:
+        self._validate_font_coverage()
+
         if "\r" in self._text:
             raise ValueError("carriage returns are not supported")
 

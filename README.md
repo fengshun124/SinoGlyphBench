@@ -97,7 +97,7 @@ python src/cli.py chat \
   --message "Read the text in this image. Return the exact visible text." \
   --image /tmp/sinoglyph-greeting.png \
   --json-schema /tmp/sinoglyph-read-schema.json \
-  --attempts 3 \
+  --max-retries 2 \
   --param max_tokens=1024 \
   --param temperature=0
 ```

@@ -1,11 +1,10 @@
 import base64
-import json
 import mimetypes
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from sinoglyph.io import PathLike, load_toml
+from sinoglyph.io import PathLike, load_toml, parse_json_response
 
 
 class LLMClientConfig:
@@ -17,7 +16,6 @@ class LLMClientConfig:
         model: str,
         system: str | None = None,
         timeout: float | None = None,
-        retries: int | None = None,
         max_retries: int | None = None,
         **request_options: Any,
     ) -> None:
@@ -27,8 +25,7 @@ class LLMClientConfig:
         self._validate_optional_string(system, "system")
         self._validate_timeout(timeout)
 
-        resolved_retries = self._resolve_retries(retries, max_retries)
-        self._validate_retries(resolved_retries)
+        self._validate_max_retries(max_retries)
         self._validate_request_options(request_options)
 
         self._base_url = base_url
@@ -36,7 +33,7 @@ class LLMClientConfig:
         self._model = model
         self._system = system
         self._timeout = timeout
-        self._retries = resolved_retries
+        self._max_retries = max_retries
         self._request_options = dict(request_options)
 
     def __repr__(self) -> str:
@@ -48,6 +45,8 @@ class LLMClientConfig:
     def from_dict(cls, mapping: dict[str, Any]) -> "LLMClientConfig":
         if not isinstance(mapping, dict):
             raise TypeError("LLMClientConfig.from_dict expects a mapping")
+        if "retries" in mapping:
+            raise TypeError("retries has been removed; use max_retries instead")
         return cls(**mapping)
 
     @classmethod
@@ -62,7 +61,7 @@ class LLMClientConfig:
         mapping = cls._load_config_mapping(config, section)
         return cls.from_dict(mapping)
 
-    def export_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = {
             "base_url": self._base_url,
             "api_key": self._api_key,
@@ -73,12 +72,9 @@ class LLMClientConfig:
             data["system"] = self._system
         if self._timeout is not None:
             data["timeout"] = self._timeout
-        if self._retries is not None:
-            data["retries"] = self._retries
+        if self._max_retries is not None:
+            data["max_retries"] = self._max_retries
         return data
-
-    def to_dict(self) -> dict[str, Any]:
-        return self.export_dict()
 
     @property
     def base_url(self) -> str:
@@ -101,8 +97,8 @@ class LLMClientConfig:
         return self._timeout
 
     @property
-    def retries(self) -> int | None:
-        return self._retries
+    def max_retries(self) -> int | None:
+        return self._max_retries
 
     @property
     def request_options(self) -> dict[str, Any]:
@@ -138,28 +134,21 @@ class LLMClientConfig:
             raise ValueError("timeout must be a positive number")
 
     @staticmethod
-    def _resolve_retries(
-        retries: int | None,
-        max_retries: int | None,
-    ) -> int | None:
-        if retries is not None and max_retries is not None and retries != max_retries:
-            raise ValueError("retries and max_retries cannot disagree")
-        return max_retries if max_retries is not None else retries
-
-    @staticmethod
-    def _validate_retries(retries: object) -> None:
-        if retries is None:
+    def _validate_max_retries(max_retries: object) -> None:
+        if max_retries is None:
             return
-        if isinstance(retries, bool) or not isinstance(retries, int):
-            raise TypeError("retries must be a non-negative integer")
-        if retries < 0:
-            raise ValueError("retries must be a non-negative integer")
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int):
+            raise TypeError("max_retries must be a non-negative integer")
+        if max_retries < 0:
+            raise ValueError("max_retries must be a non-negative integer")
 
     @staticmethod
     def _validate_request_options(request_options: dict[str, Any]) -> None:
         for key in request_options:
             if not isinstance(key, str) or not key:
                 raise TypeError("request option keys must be non-empty strings")
+            if key == "retries":
+                raise TypeError("retries has been removed; use max_retries instead")
 
     @staticmethod
     def _load_config_mapping(
@@ -185,7 +174,6 @@ class LLMClient:
         model: str | None = None,
         system: str | None = None,
         timeout: float | None = None,
-        retries: int | None = None,
         max_retries: int | None = None,
         **request_options: Any,
     ) -> None:
@@ -201,10 +189,9 @@ class LLMClient:
                 raise TypeError(
                     "api_key, model, and system cannot be passed with LLMClientConfig"
                 )
-            if timeout is not None or retries is not None or max_retries is not None:
+            if timeout is not None or max_retries is not None:
                 raise TypeError(
-                    "timeout, retries, and max_retries cannot be passed with "
-                    "LLMClientConfig"
+                    "timeout and max_retries cannot be passed with LLMClientConfig"
                 )
             if request_options:
                 raise TypeError("request options cannot be passed with LLMClientConfig")
@@ -216,7 +203,6 @@ class LLMClient:
                 model="" if model is None else model,
                 system=system,
                 timeout=timeout,
-                retries=retries,
                 max_retries=max_retries,
                 **request_options,
             )
@@ -228,8 +214,8 @@ class LLMClient:
         self._request_options = config.request_options
         self._history: list[dict[str, Any]] = []
         client_options: dict[str, Any] = {}
-        if config.retries is not None:
-            client_options["max_retries"] = config.retries
+        if config.max_retries is not None:
+            client_options["max_retries"] = config.max_retries
         self._client = OpenAI(
             base_url=config.base_url,
             api_key=config.api_key,
@@ -286,13 +272,10 @@ class LLMClient:
         files: list[str] | None = None,
         model: str | None = None,
         json_schema: dict[str, Any] | None = None,
-        attempts: int = 3,
         **kwargs: Any,
     ) -> Any:
         if not text and not images and not files:
             raise ValueError("At least one of text, images, or files is required.")
-        if attempts < 1:
-            raise ValueError("attempts must be at least 1.")
         if model and model != self._model:
             self._validate_model(model)
             self._model = model
@@ -308,7 +291,6 @@ class LLMClient:
         self._history.append(user_msg)
 
         options = {**self._request_options, **kwargs}
-        last_error: Exception | None = None
         jsonschema_validate = None
         jsonschema_validation_error: type[Exception] = ValueError
         if json_schema is not None:
@@ -325,53 +307,47 @@ class LLMClient:
                 ) from exc
             jsonschema_validation_error = JsonSchemaValidationError
 
-        for _ in range(attempts):
-            response = self._client.chat.completions.create(
-                model=self._model,
-                messages=self._messages(exclude_failed_json=json_schema is not None),
-                **options,
-            )
-            reply = self._reply_text(response)
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=self._messages(exclude_failed_json=json_schema is not None),
+            **options,
+        )
+        reply = self._reply_text(response)
 
-            if json_schema is None:
-                self._history.append(
-                    {
-                        "role": "assistant",
-                        "model": self._model,
-                        "response": reply,
-                        "json_valid": None,
-                    }
-                )
-                return reply
-
-            try:
-                parsed = parse_json_response(reply)
-                jsonschema_validate(instance=parsed, schema=json_schema)
-            except (json.JSONDecodeError, jsonschema_validation_error) as exc:
-                last_error = exc
-                self._history.append(
-                    {
-                        "role": "assistant",
-                        "model": self._model,
-                        "response": reply,
-                        "json_valid": False,
-                    }
-                )
-                continue
-
+        if json_schema is None:
             self._history.append(
                 {
                     "role": "assistant",
                     "model": self._model,
                     "response": reply,
-                    "json_valid": True,
+                    "json_valid": None,
                 }
             )
-            return parsed
+            return reply
 
-        raise ValueError(
-            f"JSON response did not match schema after {attempts} attempts."
-        ) from last_error
+        try:
+            parsed = parse_json_response(reply)
+            jsonschema_validate(instance=parsed, schema=json_schema)
+        except (ValueError, jsonschema_validation_error):
+            self._history.append(
+                {
+                    "role": "assistant",
+                    "model": self._model,
+                    "response": reply,
+                    "json_valid": False,
+                }
+            )
+            raise
+
+        self._history.append(
+            {
+                "role": "assistant",
+                "model": self._model,
+                "response": reply,
+                "json_valid": True,
+            }
+        )
+        return parsed
 
     def _validate_model(self, model: str) -> None:
         if not model:
@@ -412,6 +388,9 @@ class LLMClient:
 
     def _image_url(self, value: str) -> str:
         if self._is_url(value):
+            scheme = urlparse(value).scheme
+            if scheme not in {"https", "data"}:
+                raise ValueError(f"Only HTTPS and data URLs allowed, got {scheme}")
             return value
         path = Path(value)
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -445,20 +424,3 @@ class LLMClient:
                 part.get("text", "") for part in content if isinstance(part, dict)
             )
         return "" if content is None else str(content)
-
-
-def parse_json_response(text: str) -> Any:
-    return json.loads(_strip_json_markdown_fence(text))
-
-
-def _strip_json_markdown_fence(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) >= 2 and lines[0].strip().startswith("```"):
-        last_line = lines[-1].strip()
-        if last_line == "```":
-            return "\n".join(lines[1:-1]).strip()
-    return stripped

@@ -6,7 +6,6 @@
 name = "toxicity-identification"
 corpus_path = "data/corpus/perturbed.json"
 output_dir = "evaluation/"
-attempts = 3
 limit = 100
 cache_dir = "cache/toxicity-identification"
 n_jobs = 4
@@ -17,7 +16,7 @@ base_url_env = "LLM_BASE_URL"
 api_key_env = "LLM_API_KEY"
 model_env = "LLM_MODEL"
 timeout = 120
-retries = 3
+max_retries = 2
 max_tokens = 8192
 temperature = 0
 

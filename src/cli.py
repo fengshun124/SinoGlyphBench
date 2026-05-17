@@ -56,7 +56,7 @@ def run_cli() -> None:
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=Path("data/font/NotoSansCJKsc-Regular.otf"),
     show_default=True,
-    help="CJK font file for rendered catalog figures.",
+    help="CJK font file for rendering.",
 )
 @click.option(
     "--lgc-font",
@@ -64,7 +64,7 @@ def run_cli() -> None:
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=Path("data/font/NotoSans-Regular.ttf"),
     show_default=True,
-    help="Latin, Greek, and Cyrillic font file for rendered catalog figures.",
+    help="Latin, Greek, and Cyrillic font file for rendering.",
 )
 @click.option(
     "--symbol-font",
@@ -72,7 +72,7 @@ def run_cli() -> None:
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=Path("data/font/NotoSansMath-Regular.ttf"),
     show_default=True,
-    help="Symbol font file for rendered catalog figures.",
+    help="Symbol font file for rendering.",
 )
 @click.option(
     "--size",
@@ -236,13 +236,13 @@ def evaluate_command(
     "--symbol-font",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=None,
-    help="Symbol font file.",
+    help="Symbol font file. (Optional)",
 )
 @click.option(
     "--emoji-font",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=None,
-    help="Emoji font file.",
+    help="Emoji font file. (Optional)",
 )
 @click.option(
     "--output",
@@ -252,17 +252,47 @@ def evaluate_command(
     default=None,
     help="Output image path.",
 )
-@click.option("--size", "size_px", type=int, default=128, show_default=True)
-@click.option("--fg-color", default="black", show_default=True)
-@click.option("--bg-color", default="white", show_default=True)
+@click.option(
+    "--size",
+    "size_px",
+    type=int,
+    default=128,
+    show_default=True,
+    help="Font size in pixels.",
+)
+@click.option(
+    "--fg-color",
+    default="black",
+    show_default=True,
+    help="Foreground color (CSS name or hex).",
+)
+@click.option(
+    "--bg-color",
+    default="white",
+    show_default=True,
+    help="Background color (CSS name or hex).",
+)
 @click.option(
     "--align",
     type=click.Choice(["left", "center", "right"]),
     default="center",
     show_default=True,
+    help="Text alignment.",
 )
-@click.option("--dpi", type=int, default=300, show_default=True)
-@click.option("--pad", type=int, default=24, show_default=True)
+@click.option(
+    "--dpi",
+    type=int,
+    default=300,
+    show_default=True,
+    help="Output resolution in dots per inch.",
+)
+@click.option(
+    "--pad",
+    type=int,
+    default=24,
+    show_default=True,
+    help="Padding around text in pixels.",
+)
 def render_command(
     text: str,
     cjk_font: Path,
@@ -303,21 +333,58 @@ def render_command(
 
 
 @run_cli.command("chat")
-@click.option("--base-url", default=lambda: _env_default("LLM_BASE_URL"))
-@click.option("--api-key", default=lambda: _env_default("LLM_API_KEY"))
-@click.option("--model", default=lambda: _env_default("LLM_MODEL"))
-@click.option("--system", default=None, help="System prompt.")
-@click.option("--message", required=True, help="User prompt.")
-@click.option("--image", "images", multiple=True, help="Image path, URL, or data URL.")
-@click.option("--file", "files", multiple=True, help="Text or binary file to attach.")
-@click.option("--timeout", type=float, default=None, help="Request timeout.")
+@click.option(
+    "--base-url",
+    default=lambda: _env_default("LLM_BASE_URL"),
+)
+@click.option(
+    "--api-key",
+    default=lambda: _env_default("LLM_API_KEY"),
+)
+@click.option(
+    "--model",
+    default=lambda: _env_default("LLM_MODEL"),
+)
+@click.option(
+    "--system",
+    default=None,
+    help="System prompt.",
+)
+@click.option(
+    "--message",
+    required=True,
+    help="User prompt.",
+)
+@click.option(
+    "--image",
+    "images",
+    multiple=True,
+    help="Image path, URL, or data URL.",
+)
+@click.option(
+    "--file",
+    "files",
+    multiple=True,
+    help="Text or binary file to attach.",
+)
+@click.option(
+    "--timeout",
+    type=float,
+    default=None,
+    help="Request timeout.",
+)
+@click.option(
+    "--max-retries",
+    type=int,
+    default=None,
+    help="Retry failed API requests this many times.",
+)
 @click.option(
     "--json-schema",
     "json_schema_path",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=None,
 )
-@click.option("--attempts", type=int, default=3, show_default=True)
 @click.option(
     "--param",
     "params",
@@ -333,8 +400,8 @@ def chat_command(
     images: tuple[str, ...],
     files: tuple[str, ...],
     timeout: float | None,
+    max_retries: int | None,
     json_schema_path: Path | None,
-    attempts: int,
     params: tuple[str, ...],
 ) -> None:
     from sinoglyph.llm import LLMClient
@@ -350,6 +417,7 @@ def chat_command(
             model=model,
             system=system,
             timeout=timeout,
+            max_retries=max_retries,
             **_params(params),
         )
         reply = client.chat(
@@ -357,7 +425,6 @@ def chat_command(
             images=list(images),
             files=list(files),
             json_schema=schema,
-            attempts=attempts,
         )
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
