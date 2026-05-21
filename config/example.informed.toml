@@ -10,8 +10,8 @@ n_jobs = 5
 base_url_env = "<LLM_BASE_URL>"
 api_key_env = "<LLM_API_KEY>"
 model_env = "<LLM_MODEL>"
-timeout = 120
-max_retries = 2
+timeout = 180
+max_retries = 3
 max_tokens = 8192
 temperature = 0
 

@@ -38,6 +38,17 @@ class _EvaluationJobResult:
     entry: JsonObject
 
 
+@dataclass(frozen=True)
+class _CacheMergeResult:
+    entry: JsonObject
+    reused_results: int = 0
+    purged_failures: dict[str, int] | None = None
+    cache_changed: bool = False
+
+
+_PURGEABLE_RESUME_FAILURE_KINDS = frozenset({"no_quota", "rate_limit"})
+
+
 def run_evaluation(
     config_path: PathLike,
     output_path: PathLike | None = None,
@@ -84,10 +95,21 @@ def run_evaluation(
         cached_entries: dict[int, JsonObject] = {}
         jobs: list[_EvaluationJob] = []
         resumed_entries = 0
+        resumed_results = 0
+        purged_failures = {kind: 0 for kind in _PURGEABLE_RESUME_FAILURE_KINDS}
         for index, entry in enumerate(limited_corpus):
             entry_id = require_string(entry["id"], "entry.id")
             cached = cache.load_entry(index, entry_id)
-            entry = _merge_cached_results(entry, cached, meta, tasks)
+            merge = _merge_cached_results(entry, cached, meta, tasks)
+            entry = merge.entry
+            resumed_results += merge.reused_results
+            if merge.purged_failures is not None:
+                for kind, count in merge.purged_failures.items():
+                    purged_failures[kind] = purged_failures.get(kind, 0) + count
+            if merge.cache_changed:
+                cache_path = cache.build_entry_path(index, entry_id)
+                with cache.lock_entry(index, entry_id):
+                    cache.save_entry(entry, index, cache_path)
             if entry.get("results"):
                 resumed_entries += 1
             if _has_all_task_results(entry, tasks):
@@ -95,11 +117,13 @@ def run_evaluation(
             else:
                 jobs.append(_EvaluationJob(index=index, entry=entry))
 
-        if resumed_entries:
-            tqdm.write(
-                "Resuming evaluation from cache. Use --cache-dir with a new path or "
-                f"remove {resolved_cache_dir} for a fresh start."
-            )
+        _write_resume_summary(
+            resumed_entries,
+            resumed_results,
+            purged_failures,
+            len(jobs),
+            resolved_cache_dir,
+        )
 
         completed_entries = dict(cached_entries)
         if jobs:
@@ -214,17 +238,25 @@ def _merge_cached_results(
     cached_entry: JsonObject | None,
     meta: JsonObject,
     tasks: list[EvaluationTask],
-) -> JsonObject:
+) -> _CacheMergeResult:
     resumed = deepcopy(entry)
     if cached_entry is None:
-        return resumed
+        return _CacheMergeResult(entry=resumed)
     cached_results = cached_entry.get("results")
     if not isinstance(cached_results, list):
-        return resumed
+        return _CacheMergeResult(entry=resumed)
     tasks_by_name = {task.name: task for task in tasks}
     results_by_task_name: dict[str, JsonObject] = {}
+    purged_failures = {kind: 0 for kind in _PURGEABLE_RESUME_FAILURE_KINDS}
     for result in cached_results:
         if not isinstance(result, dict):
+            continue
+        failure_kind = result.get("failure_kind")
+        if (
+            isinstance(failure_kind, str)
+            and failure_kind in _PURGEABLE_RESUME_FAILURE_KINDS
+        ):
+            purged_failures[failure_kind] += 1
             continue
         task_name = result.get("task_name")
         if not isinstance(task_name, str) or task_name in results_by_task_name:
@@ -242,7 +274,56 @@ def _merge_cached_results(
             results_by_task_name[task_name] = candidate
     if results_by_task_name:
         resumed["results"] = _order_results(results_by_task_name, tasks)
-    return resumed
+    total_purged = sum(purged_failures.values())
+    return _CacheMergeResult(
+        entry=resumed,
+        reused_results=len(results_by_task_name),
+        purged_failures=purged_failures if total_purged else None,
+        cache_changed=total_purged > 0,
+    )
+
+
+def _write_resume_summary(
+    resumed_entries: int,
+    resumed_results: int,
+    purged_failures: dict[str, int],
+    pending_jobs: int,
+    cache_dir: Path,
+) -> None:
+    purged_total = sum(purged_failures.values())
+    if not resumed_results and not purged_total:
+        return
+    if resumed_results:
+        tqdm.write(
+            "Resuming evaluation from cache: reused "
+            f"{resumed_results} task {_plural(resumed_results, 'result')} across "
+            f"{resumed_entries} corpus {_plural(resumed_entries, 'entry', 'entries')}."
+        )
+        tqdm.write(
+            f"Use --cache-dir with a new path or remove {cache_dir} for a fresh start."
+        )
+    if purged_total:
+        details = ", ".join(
+            f"{kind}={count}"
+            for kind, count in sorted(purged_failures.items())
+            if count
+        )
+        tqdm.write(
+            "Purged "
+            f"{purged_total} cached quota/rate-limit {_plural(purged_total, 'leftover')} "
+            f"({details}); affected tasks will be retried."
+        )
+    if pending_jobs:
+        tqdm.write(
+            f"Evaluation has {pending_jobs} corpus "
+            f"{_plural(pending_jobs, 'entry', 'entries')} with pending work."
+        )
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    if count == 1:
+        return singular
+    return plural if plural is not None else f"{singular}s"
 
 
 def _is_reusable_result(result: JsonObject) -> bool:

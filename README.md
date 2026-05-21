@@ -1,17 +1,29 @@
 # SinoGlyphBench
 
-SinoGlyphBench is a benchmark and toolkit for evaluating how language and multimodal models handle Chinese moderation text under glyph-level obfuscation. It builds perturbation variants from human-annotated examples, renders text as images when needed, and evaluates whether models can read, recover, and judge the intended content.
+SinoGlyphBench is a benchmark and toolkit for evaluating how language and multimodal models handle Chinese moderation text under glyph-level obfuscation. It generates perturbation variants from human-annotated examples, can render inputs as images for visual-language model evaluation, and provides tools to measure whether models can read, recover, and interpret the intended content.
 
 The benchmark uses semantic anchors to separate meaning-critical characters from surrounding context. Each entry can be evaluated as original text, anchor-only perturbations, non-anchor-only perturbations, or full perturbations. Each variant can be sent directly as text or rendered as an image for VLM-style evaluation.
 
-## What's Included
+## Corpus Panels
 
-- `data/character/`: character decomposition data, substitution rules, the generated perturbation catalog, and optional catalog figures.
-- `data/corpus/`: literature-source corpora, annotated corpus variants, and generated perturbed corpus variants.
-- `config/`: TOML evaluation configs for model runs.
-- `evaluation/`: evaluation JSON outputs.
-- `cache/`: resumable per-entry checkpoints for evaluation runs.
-- `src/sinoglyph/`: schema validation, data-generation pipelines, evaluation runner, rendering, LLM calls, and shared I/O helpers.
+The corpus is constructed from [STATE-ToxiCN](https://aclanthology.org/2025.findings-acl.532/), [ToxicBenchCN (CNTP dataset)](https://aclanthology.org/2025.findings-acl.742/) and [PCR-ToxiCN](https://aclanthology.org/2025.emnlp-industry.172/). With human annotation and filtering, a final set of 157 high-quality examples was selected for the core evaluation panel, and a broader set of 980 examples was selected for a lower-cost panel.
+
+The construction of the corpus balances semantic-anchor and non-anchor regions using two quantities:
+
+- **Substitutable-count difference:** `abs(anchor_substitutable_count - non_anchor_substitutable_count)`, where substitutable characters are those covered by `data/character/catalog.json`.
+- **Anchor/non-anchor length ratio:** `max(anchor_character_count / non_anchor_character_count, non_anchor_character_count / anchor_character_count)`. Anchor spans are all occurrences of each `semantic_anchors[].text`; counts are measured in characters (anchor span length vs. remaining text length).
+
+| File                      | Role                  | Items | Filtering rule                                                                    |
+| ------------------------- | --------------------- | ----: | --------------------------------------------------------------------------------- |
+| `annotated.eligible.json` | Candidate Pool        | 3,031 | Valid source rows with at least one substitutable anchor and non-anchor character |
+| `annotated.json`          | Broad/economy panel   |   980 | Length ratio <= 3 and substitutable-count difference <= 2                         |
+| `annotated.strict.json`   | Core diagnostic panel |   157 | Length ratio <= 1.75 and substitutable-count difference = 0                       |
+
+| File                      | Anchor subs | Non-anchor subs | Global diff | Max item diff | Max length ratio |
+| ------------------------- | ----------: | --------------: | ----------: | ------------: | ---------------: |
+| `annotated.eligible.json` |      11,457 |          19,932 |      -8,475 |            29 |            40.50 |
+| `annotated.json`          |       3,712 |           3,774 |         -62 |             2 |             3.00 |
+| `annotated.strict.json`   |         554 |             554 |           0 |             0 |             1.75 |
 
 ## Quickstart
 
@@ -138,13 +150,11 @@ Remove `--skip-figures` when you want the rendered catalog figures as well as th
 
 ### Build The Perturbed Corpus
 
-The corpus builder applies the character catalog to annotated moderation examples and separates substitutions into anchor and non-anchor positions.
+The corpus builder applies the character catalog to annotated moderation examples and separates substitutions into anchor and non-anchor positions. By default it reads `data/corpus/annotated.json` and writes `data/corpus/perturbed.json`. The output preserves each example's `id` and `text` and adds a `substitutions` object with `anchor` and `non_anchor` lists so you can map perturbations back to the original examples.
 
 ```bash
 python src/cli.py corpus
 ```
-
-This reads `data/corpus/annotated.json` by default and writes `data/corpus/perturbed.json`.
 
 Fully customized example:
 
@@ -219,14 +229,15 @@ The runner resolves those environment variable names at runtime. You can also pu
 Evaluation reads a TOML config, sends each configured task to an OpenAI-compatible chat API, validates JSON responses, writes resumable cache entries, and emits a single result JSON.
 
 ```bash
-python src/cli.py evaluate -c config/example.toml
+python src/cli.py evaluate -c config/example.blind.toml
+python src/cli.py evaluate -c config/example.informed.toml
 ```
 
 Fully customized example:
 
 ```bash
 python src/cli.py evaluate \
-  --config config/example.toml \
+  --config config/example.blind.toml \
   --output evaluation/toxicity-identification.json \
   --cache-dir cache/toxicity-identification \
   --n-jobs 4
