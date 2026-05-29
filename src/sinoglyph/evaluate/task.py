@@ -12,9 +12,9 @@ from sinoglyph.evaluate.prompt import build_image_message, build_text_message
 from sinoglyph.evaluate.text import wrap_task_input
 from sinoglyph.io import parse_json_response
 from sinoglyph.schema.base import JsonObject
-from sinoglyph.schema.corpus import PerturbedCorpusEntry
+from sinoglyph.schema.corpus import ObfuscatedCorpusEntry
 from sinoglyph.schema.evaluation import EvaluationTask, validate_response_instance
-from sinoglyph.schema.types import InputType, ModerationLabel
+from sinoglyph.schema.types import Modality, ModerationLabel
 
 if TYPE_CHECKING:
     from sinoglyph.render import TextRenderConfig
@@ -49,16 +49,14 @@ def run_task_evaluation(
     render_config: TextRenderConfig | None,
     cache_dir: Path,
 ) -> JsonObject:
-    corpus_entry = PerturbedCorpusEntry.parse_mapping(entry)
-    raw_input_text = corpus_entry.input_text(task.source.value, task.variant)
+    corpus_entry = ObfuscatedCorpusEntry.parse_mapping(entry)
+    raw_input_text = corpus_entry.input_text(task.obfuscation_type.value, task.scope)
     input_text = (
         wrap_task_input(corpus_entry, task, raw_input_text, render_mapping)
-        if task.input_type == InputType.IMAGE
+        if task.modality == Modality.IMAGE
         else raw_input_text
     )
-    substitution_fraction = corpus_entry.substitution_fraction(
-        task.source.value, task.variant
-    )
+    obf_density = corpus_entry.obf_density(task.scope)
     raw = ""
     parse_error: str | None = None
     request_error: str | None = None
@@ -67,7 +65,7 @@ def run_task_evaluation(
     predicted_label = None
     try_count = 0
     image_path = None
-    if task.input_type == InputType.IMAGE:
+    if task.modality == Modality.IMAGE:
         if render_config is None:
             raise ValueError("render config is required for image tasks")
         image_path = _render_task_image(
@@ -76,19 +74,20 @@ def run_task_evaluation(
 
     for try_index in range(1, max_tries + 1):
         try_count = try_index
-        chat_client.clear(keep_system=True)
         try:
-            if task.input_type == InputType.TEXT:
+            if task.modality == Modality.TEXT:
                 raw = cast(
                     str,
-                    chat_client.chat(text=build_text_message(text_prompt, input_text)),
+                    chat_client.chat_once(
+                        text=build_text_message(text_prompt, input_text)
+                    ),
                 )
             else:
                 if image_path is None:
                     raise AssertionError("image path was not prepared for image task")
                 raw = cast(
                     str,
-                    chat_client.chat(
+                    chat_client.chat_once(
                         text=build_image_message(image_prompt), images=[str(image_path)]
                     ),
                 )
@@ -127,7 +126,7 @@ def run_task_evaluation(
     return {
         "task_name": task.name,
         "input_text": input_text,
-        "substitution_fraction": substitution_fraction,
+        "obf_density": obf_density,
         "response": {"raw": raw, "parsed": parsed, "parse_error": parse_error},
         "predicted_label": predicted_label,
         "label_match": (
@@ -233,7 +232,7 @@ def _sanitize_error_message(message: str) -> str:
 
 def _render_task_image(
     cache_dir: Path,
-    entry: PerturbedCorpusEntry,
+    entry: ObfuscatedCorpusEntry,
     task: EvaluationTask,
     input_text: str,
     render_config: TextRenderConfig,

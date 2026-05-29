@@ -12,14 +12,14 @@ from sinoglyph.render import TextRenderConfig, TextRenderer
 from sinoglyph.schema.base import JsonObject
 from sinoglyph.schema.character import (
     CharacterDecomposition,
-    CharacterPerturbCatalog,
     CharacterSubstitution,
+    GlyphObfuscationCatalog,
 )
 
 Parts: TypeAlias = tuple[str, ...]
-Variant: TypeAlias = tuple[str, ...]
+GlyphForm: TypeAlias = tuple[str, ...]
 
-PREFERRED_VARIANTS: dict[Parts, list[Variant]] = {
+PREFERRED_GLYPH_FORMS: dict[Parts, list[GlyphForm]] = {
     ("口", "幺"): [("ﾛ", "幺")],
     ("幺", "力"): [("幺", "ｶ")],
 }
@@ -27,10 +27,10 @@ PREFERRED_VARIANTS: dict[Parts, list[Variant]] = {
 
 @dataclass(frozen=True)
 class CatalogCandidate:
-    variant: Variant
+    form: GlyphForm
     source_parts: Parts
-    segments: tuple[Variant, ...]
-    substituted_count: int
+    segments: tuple[GlyphForm, ...]
+    obfuscated_part_count: int
     order: int
 
 
@@ -59,13 +59,13 @@ class CharacterCatalogBuilder:
         self._substitution = {
             unit: {
                 "unit_type": substitution.unit_type(unit),
-                "perturbation": substitution.perturbations(unit),
+                "glyph_forms": substitution.glyph_forms(unit),
             }
             for unit in substitution.keys()
         }
         self._halfwidth_kana = _build_halfwidth_kana_map()
         self._preference_default_rank = (
-            sum(len(variants) for variants in PREFERRED_VARIANTS.values()) + 1
+            sum(len(forms) for forms in PREFERRED_GLYPH_FORMS.values()) + 1
         )
         self._layout_cache: dict[str, list[Parts]] = {}
 
@@ -77,11 +77,11 @@ class CharacterCatalogBuilder:
                 continue
 
             ranked = self._rank_candidates(
-                self._make_direct_candidates(unit, entry["perturbation"])
+                self._make_direct_candidates(unit, entry["glyph_forms"])
             )
             catalog[unit] = {
                 "parts": [unit],
-                "perturbations": [list(candidate.variant) for candidate in ranked],
+                "glyph_forms": [list(candidate.form) for candidate in ranked],
             }
 
         for character in self._decomposition:
@@ -89,16 +89,16 @@ class CharacterCatalogBuilder:
             candidates = self._make_layout_candidates(layouts)
 
             if character in catalog:
-                existing = cast(list[list[str]], catalog[character]["perturbations"])
+                existing = cast(list[list[str]], catalog[character]["glyph_forms"])
                 candidates.extend(
                     CatalogCandidate(
-                        tuple(variant),
+                        tuple(form),
                         (character,),
-                        (tuple(variant),),
+                        (tuple(form),),
                         1,
                         -len(existing) + index,
                     )
-                    for index, variant in enumerate(existing)
+                    for index, form in enumerate(existing)
                 )
                 parts = cast(list[str], catalog[character]["parts"])
             else:
@@ -110,19 +110,19 @@ class CharacterCatalogBuilder:
             ranked = self._rank_candidates(candidates)
             catalog[character] = {
                 "parts": parts,
-                "perturbations": [list(candidate.variant) for candidate in ranked],
+                "glyph_forms": [list(candidate.form) for candidate in ranked],
             }
 
         result = cast(JsonObject, catalog)
-        CharacterPerturbCatalog.parse_mapping(result)
+        GlyphObfuscationCatalog.parse_mapping(result)
         return result
 
     def _make_direct_candidates(
-        self, unit: str, perturbations: object
+        self, unit: str, glyph_forms: object
     ) -> list[CatalogCandidate]:
         candidates: list[CatalogCandidate] = []
-        for index, variant in enumerate(cast(list[list[str]], perturbations)):
-            normalized = self._normalize_variant(tuple(variant))
+        for index, form in enumerate(cast(list[list[str]], glyph_forms)):
+            normalized = self._normalize_form(tuple(form))
             candidates.append(
                 CatalogCandidate(normalized, (unit,), (normalized,), 1, index)
             )
@@ -165,27 +165,27 @@ class CharacterCatalogBuilder:
         order = 0
 
         for layout in layouts:
-            component_options: list[list[tuple[Variant, int]]] = []
+            component_options: list[list[tuple[GlyphForm, int]]] = []
             for part in layout:
                 options = [((part,), 0)]
                 if part in self._substitution:
-                    perturbations = cast(
-                        list[list[str]], self._substitution[part]["perturbation"]
+                    glyph_forms = cast(
+                        list[list[str]], self._substitution[part]["glyph_forms"]
                     )
-                    options.extend((tuple(variant), 1) for variant in perturbations)
+                    options.extend((tuple(form), 1) for form in glyph_forms)
                 component_options.append(options)
 
             for combination in product(*component_options):
-                substituted_count = sum(count for _variant, count in combination)
-                if substituted_count == 0:
+                obfuscated_part_count = sum(count for _form, count in combination)
+                if obfuscated_part_count == 0:
                     continue
 
-                raw_segments = tuple(variant for variant, _count in combination)
-                variant = self._normalize_variant(_flatten_segments(raw_segments))
-                segments = self._normalize_segments(raw_segments, variant)
+                raw_segments = tuple(form for form, _count in combination)
+                form = self._normalize_form(_flatten_segments(raw_segments))
+                segments = self._normalize_segments(raw_segments, form)
                 candidates.append(
                     CatalogCandidate(
-                        variant, layout, segments, substituted_count, order
+                        form, layout, segments, obfuscated_part_count, order
                     )
                 )
                 order += 1
@@ -195,28 +195,28 @@ class CharacterCatalogBuilder:
     def _rank_candidates(
         self, candidates: Sequence[CatalogCandidate]
     ) -> list[CatalogCandidate]:
-        best_by_variant: dict[Variant, CatalogCandidate] = {}
+        best_by_form: dict[GlyphForm, CatalogCandidate] = {}
         for candidate in candidates:
-            existing = best_by_variant.get(candidate.variant)
+            existing = best_by_form.get(candidate.form)
             if existing is None or self._make_rank_key(candidate) < self._make_rank_key(
                 existing
             ):
-                best_by_variant[candidate.variant] = candidate
+                best_by_form[candidate.form] = candidate
 
-        return sorted(best_by_variant.values(), key=self._make_rank_key)
+        return sorted(best_by_form.values(), key=self._make_rank_key)
 
     def _make_rank_key(self, candidate: CatalogCandidate) -> tuple[int, int, int, int]:
         return (
             self._score_preference(candidate),
-            -_count_non_cjk_codepoints(candidate.variant),
-            -candidate.substituted_count,
+            -_count_non_cjk_codepoints(candidate.form),
+            -candidate.obfuscated_part_count,
             candidate.order,
         )
 
     def _score_preference(self, candidate: CatalogCandidate) -> int:
         best_rank = self._preference_default_rank
 
-        for preferred_parts, preferred_variants in PREFERRED_VARIANTS.items():
+        for preferred_parts, preferred_forms in PREFERRED_GLYPH_FORMS.items():
             width = len(preferred_parts)
             if width > len(candidate.source_parts):
                 continue
@@ -225,27 +225,27 @@ class CharacterCatalogBuilder:
                 if candidate.source_parts[start : start + width] != preferred_parts:
                     continue
 
-                local_variant = _flatten_segments(
+                local_form = _flatten_segments(
                     candidate.segments[start : start + width]
                 )
-                for index, preferred_variant in enumerate(preferred_variants):
-                    if local_variant == preferred_variant:
+                for index, preferred_form in enumerate(preferred_forms):
+                    if local_form == preferred_form:
                         best_rank = min(best_rank, index)
 
         return best_rank
 
-    def _normalize_variant(self, variant: Variant) -> Variant:
-        if len(variant) <= 1:
-            return variant
+    def _normalize_form(self, form: GlyphForm) -> GlyphForm:
+        if len(form) <= 1:
+            return form
 
-        return tuple(self._halfwidth_kana.get(token, token) for token in variant)
+        return tuple(self._halfwidth_kana.get(token, token) for token in form)
 
     def _normalize_segments(
         self,
-        segments: tuple[Variant, ...],
-        normalized_variant: Variant,
-    ) -> tuple[Variant, ...]:
-        if len(normalized_variant) <= 1:
+        segments: tuple[GlyphForm, ...],
+        normalized_form: GlyphForm,
+    ) -> tuple[GlyphForm, ...]:
+        if len(normalized_form) <= 1:
             return segments
 
         return tuple(
@@ -291,18 +291,18 @@ def render_catalog_figures(
         catalog.items(), desc="Rendering character catalog", unit="character"
     ):
         entry = cast(Mapping[str, object], raw_entry)
-        perturbations = cast(list[list[str]], entry["perturbations"])
-        lines = [character, "", *["".join(variant) for variant in perturbations]]
+        glyph_forms = cast(list[list[str]], entry["glyph_forms"])
+        lines = [character, "", *["".join(form) for form in glyph_forms]]
         output_path = output_dir / _make_catalog_figure_filename(character)
         TextRenderer("\n".join(lines), render_config).render(output_path)
 
     return len(catalog)
 
 
-def _count_non_cjk_codepoints(variant: Variant) -> int:
+def _count_non_cjk_codepoints(form: GlyphForm) -> int:
     return sum(
         1
-        for token in variant
+        for token in form
         for character in token
         if not _is_cjk_codepoint(ord(character))
     )
@@ -322,7 +322,7 @@ def _is_cjk_codepoint(codepoint: int) -> bool:
     )
 
 
-def _flatten_segments(segments: Sequence[Variant]) -> Variant:
+def _flatten_segments(segments: Sequence[GlyphForm]) -> GlyphForm:
     return tuple(token for segment in segments for token in segment)
 
 

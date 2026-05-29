@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from sinoglyph.io import PathLike, load_json, save_json
 from sinoglyph.schema.base import JsonObject
-from sinoglyph.schema.types import ModerationLabel, TaskVariant
+from sinoglyph.schema.types import ModerationLabel, ObfuscationScope
 from sinoglyph.schema.utils import (
     require_enum,
     require_keys,
@@ -14,32 +14,35 @@ from sinoglyph.schema.utils import (
     require_string,
 )
 
-VARIANTS = tuple(item.value for item in TaskVariant)
+SCOPES = tuple(item.value for item in ObfuscationScope)
 
 
 @dataclass(frozen=True)
-class SubstitutionRecord:
+class GlyphObfuscationRecord:
     character: str
     decomposition: str
-    perturbation: str
+    cross_script: str
 
     @classmethod
-    def parse_mapping(cls, mapping: object, context: str) -> "SubstitutionRecord":
+    def parse_mapping(cls, mapping: object, context: str) -> "GlyphObfuscationRecord":
         raw = require_mapping(mapping, context)
-        require_keys(raw, {"character", "decomposition", "perturbation"}, context)
+        require_keys(raw, {"character", "decomposition", "cross_script"}, context)
         return cls(
             character=require_string(raw["character"], f"{context}.character"),
             decomposition=require_string(
                 raw["decomposition"], f"{context}.decomposition"
             ),
-            perturbation=require_string(raw["perturbation"], f"{context}.perturbation"),
+            cross_script=require_string(
+                raw["cross_script"],
+                f"{context}.cross_script",
+            ),
         )
 
     def export_mapping(self) -> JsonObject:
         return {
             "character": self.character,
             "decomposition": self.decomposition,
-            "perturbation": self.perturbation,
+            "cross_script": self.cross_script,
         }
 
 
@@ -89,41 +92,46 @@ class CorpusEntry:
 
 
 @dataclass(frozen=True)
-class PerturbedCorpusEntry(CorpusEntry):
-    substitutions: JsonObject
-    decomposition: dict[TaskVariant, str]
-    perturbation: dict[TaskVariant, str]
+class ObfuscatedCorpusEntry(CorpusEntry):
+    obfuscations: JsonObject
+    decomposition: dict[ObfuscationScope, str]
+    cross_script: dict[ObfuscationScope, str]
 
     @classmethod
     def parse_mapping(
         cls,
         mapping: object,
-        context: str = "perturbed corpus entry",
-    ) -> "PerturbedCorpusEntry":
+        context: str = "obfuscated corpus entry",
+    ) -> "ObfuscatedCorpusEntry":
         raw = require_mapping(mapping, context)
         base = CorpusEntry.parse_mapping(raw, context)
-        require_keys(raw, {"substitutions", "decomposition", "perturbation"}, context)
+        require_keys(
+            raw,
+            {"obfuscations", "decomposition", "cross_script"},
+            context,
+        )
         return cls(
             id=base.id,
             text=base.text,
             expected_label=base.expected_label,
             semantic_anchors=base.semantic_anchors,
-            substitutions=_substitutions(
-                raw["substitutions"], f"{context}.substitutions"
-            ),
-            decomposition=_variant_texts(
+            obfuscations=_obfuscations(raw["obfuscations"], f"{context}.obfuscations"),
+            decomposition=_scope_texts(
                 raw["decomposition"], f"{context}.decomposition"
             ),
-            perturbation=_variant_texts(raw["perturbation"], f"{context}.perturbation"),
+            cross_script=_scope_texts(
+                raw["cross_script"],
+                f"{context}.cross_script",
+            ),
         )
 
     def export_mapping(self) -> JsonObject:
         output = self._base_mapping()
         output.update(
             {
-                "substitutions": _copy_substitutions(self.substitutions),
-                "decomposition": _serialize_variant_texts(self.decomposition),
-                "perturbation": _serialize_variant_texts(self.perturbation),
+                "obfuscations": _copy_obfuscations(self.obfuscations),
+                "decomposition": _serialize_scope_texts(self.decomposition),
+                "cross_script": _serialize_scope_texts(self.cross_script),
             }
         )
         return output
@@ -131,20 +139,24 @@ class PerturbedCorpusEntry(CorpusEntry):
     def _base_mapping(self) -> JsonObject:
         return super().export_mapping()
 
-    def input_text(self, source: str, variant: TaskVariant) -> str:
-        if source == "text":
+    def input_text(self, obfuscation_type: str, scope: ObfuscationScope) -> str:
+        if scope == ObfuscationScope.ORIGINAL:
             return self.text
-        values = self.decomposition if source == "decomposition" else self.perturbation
-        return values[variant]
+        values = (
+            self.decomposition
+            if obfuscation_type == "decomposition"
+            else self.cross_script
+        )
+        return values[scope]
 
-    def substitution_fraction(self, source: str, variant: TaskVariant) -> float | int:
-        if source == "text":
+    def obf_density(self, scope: ObfuscationScope) -> float | int:
+        if scope == ObfuscationScope.ORIGINAL:
             return 0
-        fractions = require_mapping(
-            self.substitutions["fraction"], "substitutions.fraction"
+        densities = require_mapping(
+            self.obfuscations["obf_density"], "obfuscations.obf_density"
         )
         return require_number(
-            fractions[variant.value], f"substitutions.fraction.{variant.value}"
+            densities[scope.value], f"obfuscations.obf_density.{scope.value}"
         )
 
 
@@ -152,16 +164,16 @@ def load_annotated_corpus(file_path: PathLike) -> list[CorpusEntry]:
     return parse_annotated_corpus(load_json(file_path))
 
 
-def load_perturbed_corpus(file_path: PathLike) -> list[PerturbedCorpusEntry]:
-    return parse_perturbed_corpus(load_json(file_path))
+def load_obfuscated_corpus(file_path: PathLike) -> list[ObfuscatedCorpusEntry]:
+    return parse_obfuscated_corpus(load_json(file_path))
 
 
 def save_annotated_corpus(corpus: list[CorpusEntry], file_path: PathLike) -> None:
     save_json([entry.to_source_mapping() for entry in corpus], file_path)
 
 
-def save_perturbed_corpus(
-    corpus: list[PerturbedCorpusEntry], file_path: PathLike
+def save_obfuscated_corpus(
+    corpus: list[ObfuscatedCorpusEntry], file_path: PathLike
 ) -> None:
     save_json([entry.export_mapping() for entry in corpus], file_path)
 
@@ -173,10 +185,10 @@ def parse_annotated_corpus(data: object) -> list[CorpusEntry]:
     ]
 
 
-def parse_perturbed_corpus(data: object) -> list[PerturbedCorpusEntry]:
+def parse_obfuscated_corpus(data: object) -> list[ObfuscatedCorpusEntry]:
     return [
-        PerturbedCorpusEntry.parse_mapping(entry, f"PerturbedCorpus[{index}]")
-        for index, entry in enumerate(require_list(data, "PerturbedCorpus"))
+        ObfuscatedCorpusEntry.parse_mapping(entry, f"ObfuscatedCorpus[{index}]")
+        for index, entry in enumerate(require_list(data, "ObfuscatedCorpus"))
     ]
 
 
@@ -203,68 +215,70 @@ def _semantic_anchors(value: object, context: str) -> list[JsonObject]:
     return anchors
 
 
-def _variant_texts(value: object, context: str) -> dict[TaskVariant, str]:
+def _scope_texts(value: object, context: str) -> dict[ObfuscationScope, str]:
     raw = require_mapping(value, context)
-    require_keys(raw, VARIANTS, context)
+    require_keys(raw, SCOPES, context)
     return {
-        variant: require_string(raw[variant.value], f"{context}.{variant.value}")
-        for variant in TaskVariant
+        scope: require_string(raw[scope.value], f"{context}.{scope.value}")
+        for scope in ObfuscationScope
     }
 
 
-def _serialize_variant_texts(values: dict[TaskVariant, str]) -> JsonObject:
-    return {variant.value: values[variant] for variant in TaskVariant}
+def _serialize_scope_texts(values: dict[ObfuscationScope, str]) -> JsonObject:
+    return {scope.value: values[scope] for scope in ObfuscationScope}
 
 
-def _substitutions(value: object, context: str) -> JsonObject:
+def _obfuscations(value: object, context: str) -> JsonObject:
     raw = require_mapping(value, context)
-    require_keys(raw, {"anchor", "non_anchor", "fraction"}, context)
+    require_keys(raw, {"anchor", "background", "obf_density"}, context)
     anchor = [
         record.export_mapping()
         for index, record in enumerate(require_list(raw["anchor"], f"{context}.anchor"))
         for record in [
-            SubstitutionRecord.parse_mapping(record, f"{context}.anchor[{index}]")
+            GlyphObfuscationRecord.parse_mapping(record, f"{context}.anchor[{index}]")
         ]
     ]
-    non_anchor = [
+    background = [
         record.export_mapping()
         for index, record in enumerate(
-            require_list(raw["non_anchor"], f"{context}.non_anchor")
+            require_list(raw["background"], f"{context}.background")
         )
         for record in [
-            SubstitutionRecord.parse_mapping(record, f"{context}.non_anchor[{index}]")
+            GlyphObfuscationRecord.parse_mapping(
+                record, f"{context}.background[{index}]"
+            )
         ]
     ]
-    fraction = _variant_fractions(raw["fraction"], f"{context}.fraction")
-    return {"anchor": anchor, "non_anchor": non_anchor, "fraction": fraction}
+    obf_density = _scope_densities(raw["obf_density"], f"{context}.obf_density")
+    return {"anchor": anchor, "background": background, "obf_density": obf_density}
 
 
-def _variant_fractions(value: object, context: str) -> JsonObject:
+def _scope_densities(value: object, context: str) -> JsonObject:
     raw = require_mapping(value, context)
-    require_keys(raw, VARIANTS, context)
-    fractions = {
-        variant.value: require_number(raw[variant.value], f"{context}.{variant.value}")
-        for variant in TaskVariant
+    require_keys(raw, SCOPES, context)
+    densities = {
+        scope.value: require_number(raw[scope.value], f"{context}.{scope.value}")
+        for scope in ObfuscationScope
     }
-    for variant, fraction in fractions.items():
-        if fraction < 0 or fraction > 1:
-            raise ValueError(f"{context}.{variant} must be between 0 and 1")
-    return fractions
+    for scope, density in densities.items():
+        if density < 0 or density > 1:
+            raise ValueError(f"{context}.{scope} must be between 0 and 1")
+    return densities
 
 
-def _copy_substitutions(substitutions: JsonObject) -> JsonObject:
+def _copy_obfuscations(obfuscations: JsonObject) -> JsonObject:
     return {
         "anchor": [
             dict(record)
-            for record in require_list(substitutions["anchor"], "substitutions.anchor")
+            for record in require_list(obfuscations["anchor"], "obfuscations.anchor")
         ],
-        "non_anchor": [
+        "background": [
             dict(record)
             for record in require_list(
-                substitutions["non_anchor"], "substitutions.non_anchor"
+                obfuscations["background"], "obfuscations.background"
             )
         ],
-        "fraction": dict(
-            require_mapping(substitutions["fraction"], "substitutions.fraction")
+        "obf_density": dict(
+            require_mapping(obfuscations["obf_density"], "obfuscations.obf_density")
         ),
     }

@@ -16,21 +16,20 @@ class StringEnum(str, Enum):
             raise ValueError(f"{context} must be one of: {choices}") from exc
 
 
-class InputType(StringEnum):
+class Modality(StringEnum):
     TEXT = "text"
     IMAGE = "image"
 
 
-class TaskSource(StringEnum):
-    TEXT = "text"
+class ObfuscationType(StringEnum):
     DECOMPOSITION = "decomposition"
-    PERTURBATION = "perturbation"
+    CROSS_SCRIPT = "cross_script"
 
 
-class TaskVariant(StringEnum):
+class ObfuscationScope(StringEnum):
     ORIGINAL = "original"
     ANCHOR_ONLY = "anchor_only"
-    NON_ANCHOR_ONLY = "non_anchor_only"
+    BACKGROUND_ONLY = "background_only"
     FULL = "full"
 
 

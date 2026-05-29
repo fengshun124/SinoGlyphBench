@@ -1,8 +1,8 @@
 # SinoGlyphBench
 
-SinoGlyphBench is a benchmark and toolkit for evaluating how language and multimodal models handle Chinese moderation text under glyph-level obfuscation. It generates perturbation variants from human-annotated examples, can render inputs as images for visual-language model evaluation, and provides tools to measure whether models can read, recover, and interpret the intended content.
+SinoGlyphBench is a benchmark and toolkit for evaluating how language and multimodal models handle Chinese moderation text under glyph-level obfuscation. It generates obfuscated variants from human-annotated examples, can render inputs as images for visual-language model evaluation, and provides tools to measure whether models can read, recover, and interpret the intended content.
 
-The benchmark uses semantic anchors to separate meaning-critical characters from surrounding context. Each entry can be evaluated as original text, anchor-only perturbations, non-anchor-only perturbations, or full perturbations. Each variant can be sent directly as text or rendered as an image for VLM-style evaluation.
+The benchmark uses semantic anchors to separate meaning-critical characters from surrounding context. Each entry can be evaluated as original text, anchor-only obfuscations, background-only obfuscations, or full obfuscations. Each variant can be sent directly as text or rendered as an image for VLM-style evaluation.
 
 ## Corpus Panels
 
@@ -118,7 +118,7 @@ The `chat` command reads `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` by defau
 
 ## Pipeline
 
-The full workflow is: build the character catalog, build a perturbed corpus from annotations, optionally render text probes, then run model evaluation from a TOML config.
+The full workflow is: build the character catalog, build an obfuscated corpus from annotations, optionally render text probes, then run model evaluation from a TOML config.
 
 The Python implementation is organized by function: `sinoglyph.pipeline` builds catalog and corpus artifacts, `sinoglyph.evaluate` runs model evaluation, `sinoglyph.schema` validates structured data, and `sinoglyph.render` renders text probes and image-mode inputs.
 
@@ -150,7 +150,7 @@ Remove `--skip-figures` when you want the rendered catalog figures as well as th
 
 ### Build The Perturbed Corpus
 
-The corpus builder applies the character catalog to annotated moderation examples and separates substitutions into anchor and non-anchor positions. By default it reads `data/corpus/annotated.json` and writes `data/corpus/perturbed.json`. The output preserves each example's `id` and `text` and adds a `substitutions` object with `anchor` and `non_anchor` lists so you can map perturbations back to the original examples.
+The corpus builder applies the character catalog to annotated moderation examples and separates obfuscations into anchor and background positions. By default it reads `data/corpus/annotated.json` and writes `data/corpus/obfuscated.json`. The output preserves each example's `id` and `text` and adds an `obfuscations` object with `anchor`, `background`, and `obf_density` fields so you can map obfuscations back to the original examples.
 
 ```bash
 python src/cli.py corpus
@@ -162,12 +162,12 @@ Fully customized example:
 python src/cli.py corpus \
   --annotated data/corpus/annotated.json \
   --catalog data/character/catalog.json \
-  --output data/corpus/perturbed.json
+  --output data/corpus/obfuscated.json
 ```
 
 ### Render A Text Probe
 
-The renderer is useful for checking how a perturbed string will look before image-mode evaluation.
+The renderer is useful for checking how an obfuscated string will look before image-mode evaluation.
 
 ```bash
 python src/cli.py render \
@@ -199,11 +199,11 @@ python src/cli.py render \
 
 Evaluation tasks combine three dimensions:
 
-- `input_type`: `text` sends the string directly; `image` renders the string first and sends the image.
-- `source`: `text` uses the original text, `decomposition` uses decomposed character parts, and `perturbation` uses substituted glyph-like variants.
-- `variant`: `original`, `anchor_only`, `non_anchor_only`, or `full`.
+- `modality`: `text` sends the string directly; `image` renders the string first and sends the image.
+- `obfuscation_type`: `decomposition` uses decomposed character parts, and `cross_script` uses substituted glyph-like variants.
+- `scope`: `original`, `anchor_only`, `background_only`, or `full`.
 
-For `source = "text"`, the variant must be `original`. For image tasks, the config must include a `[render]` section with fonts and rendering settings.
+For image tasks, the config must include a `[render]` section with fonts and rendering settings.
 
 The default evaluation response schema expects one JSON object with:
 
@@ -229,15 +229,15 @@ The runner resolves those environment variable names at runtime. You can also pu
 Evaluation reads a TOML config, sends each configured task to an OpenAI-compatible chat API, validates JSON responses, writes resumable cache entries, and emits a single result JSON.
 
 ```bash
-python src/cli.py evaluate -c config/example.blind.toml
-python src/cli.py evaluate -c config/example.informed.toml
+python src/cli.py evaluate -c config/example.generic.toml
+python src/cli.py evaluate -c config/example.obfuscation_aware.toml
 ```
 
 Fully customized example:
 
 ```bash
 python src/cli.py evaluate \
-  --config config/example.blind.toml \
+  --config config/example.generic.toml \
   --output evaluation/toxicity-identification.json \
   --cache-dir cache/toxicity-identification \
   --n-jobs 4
@@ -259,7 +259,7 @@ python src/cli.py chat --help
 Run lightweight local smoke checks:
 
 ```bash
-python src/cli.py corpus --output /tmp/perturbed.json
+python src/cli.py corpus --output /tmp/obfuscated.json
 python src/cli.py render \
   --text "测试" \
   --cjk-font data/font/NotoSansCJKsc-Regular.otf \

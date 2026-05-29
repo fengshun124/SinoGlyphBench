@@ -211,6 +211,7 @@ class ChatClient:
         self._base_url = config.base_url
         self._api_key = config.api_key
         self._model = config.model
+        self._system = config.system
         self._request_options = config.request_options
         self._history: list[dict[str, Any]] = []
         client_options: dict[str, Any] = {}
@@ -257,6 +258,7 @@ class ChatClient:
     def set_system(self, prompt: str) -> None:
         if not prompt:
             raise ValueError("System prompt is required.")
+        self._system = prompt
         self._history.append({"role": "system", "content": prompt})
 
     def clear(self, keep_system: bool = True) -> None:
@@ -349,6 +351,33 @@ class ChatClient:
         )
         return parsed
 
+    def chat_once(
+        self,
+        text: str | None = None,
+        images: list[str] | None = None,
+        files: list[str] | None = None,
+        model: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        if not text and not images and not files:
+            raise ValueError("At least one of text, images, or files is required.")
+        selected_model = self._model
+        if model and model != selected_model:
+            self._validate_model(model)
+            selected_model = model
+        messages = self._single_turn_messages(
+            text=text,
+            images=list(images or []),
+            files=list(files or []),
+        )
+        options = {**self._request_options, **kwargs}
+        response = self._client.chat.completions.create(
+            model=selected_model,
+            messages=messages,
+            **options,
+        )
+        return self._reply_text(response)
+
     def _validate_model(self, model: str) -> None:
         if not model:
             raise ValueError("Model is required.")
@@ -371,6 +400,30 @@ class ChatClient:
                 if exclude_failed_json and msg.get("json_valid") is False:
                     continue
                 messages.append({"role": "assistant", "content": msg["response"]})
+        return messages
+
+    def _single_turn_messages(
+        self,
+        *,
+        text: str | None,
+        images: list[str],
+        files: list[str],
+    ) -> list[dict[str, Any]]:
+        messages: list[dict[str, Any]] = []
+        if self._system:
+            messages.append({"role": "system", "content": self._system})
+        messages.append(
+            {
+                "role": "user",
+                "content": self._user_parts(
+                    {
+                        "text": text or "",
+                        "images": images,
+                        "files": files,
+                    }
+                ),
+            }
+        )
         return messages
 
     def _user_parts(self, content: dict[str, Any]) -> list[dict[str, Any]]:

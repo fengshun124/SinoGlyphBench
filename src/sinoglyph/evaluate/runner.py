@@ -16,13 +16,13 @@ from sinoglyph.evaluate.prompt import append_response_contract, build_response_c
 from sinoglyph.evaluate.task import run_task_evaluation
 from sinoglyph.io import PathLike, load_env_file, save_json
 from sinoglyph.schema.base import JsonObject
-from sinoglyph.schema.corpus import load_perturbed_corpus
+from sinoglyph.schema.corpus import load_obfuscated_corpus
 from sinoglyph.schema.evaluation import (
     EvaluationConfig,
     EvaluationResult,
     EvaluationTask,
 )
-from sinoglyph.schema.types import InputType
+from sinoglyph.schema.types import Modality
 from sinoglyph.schema.utils import require_string
 
 
@@ -74,7 +74,7 @@ def run_evaluation(
     prepare_cache_dir(resolved_cache_dir)
     cache = EvaluationCache(resolved_cache_dir, fingerprint)
 
-    corpus = load_perturbed_corpus(settings.corpus_path)
+    corpus = load_obfuscated_corpus(settings.corpus_path)
     selected_corpus = corpus if settings.limit is None else corpus[: settings.limit]
     limited_corpus = [entry.export_mapping() for entry in selected_corpus]
 
@@ -84,7 +84,7 @@ def run_evaluation(
         max_tries = max_retries + 1
         chat_config["max_retries"] = 0
         tasks = config.tasks
-        needs_render = any(task.input_type == InputType.IMAGE for task in tasks)
+        needs_render = any(task.modality == Modality.IMAGE for task in tasks)
         render_mapping = config.render if needs_render else None
         render_config_mapping = (
             config.build_render_config_mapping() if needs_render else None
@@ -207,9 +207,9 @@ def _evaluate_corpus_entry(
     cache_path = build_cache_entry_path(
         cache_dir, job.index, require_string(entry["id"], "entry.id")
     )
+    client = ChatClient(ChatClientConfig.parse_dict(chat_config))
     for task in tasks:
         if task.name not in results_by_task_name:
-            client = ChatClient(ChatClientConfig.parse_dict(chat_config))
             results_by_task_name[task.name] = run_task_evaluation(
                 entry,
                 task,

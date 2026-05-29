@@ -4,9 +4,9 @@ import unicodedata as ud
 from typing import cast
 
 from sinoglyph.schema.base import JsonObject
-from sinoglyph.schema.corpus import PerturbedCorpusEntry
+from sinoglyph.schema.corpus import ObfuscatedCorpusEntry
 from sinoglyph.schema.evaluation import EvaluationTask
-from sinoglyph.schema.types import TaskSource, TaskVariant
+from sinoglyph.schema.types import ObfuscationScope, ObfuscationType
 from sinoglyph.schema.utils import require_list, require_mapping, require_string
 
 
@@ -18,7 +18,7 @@ def wrap_evaluation_text(text: str, render: JsonObject | None) -> str:
 
 
 def wrap_task_input(
-    entry: PerturbedCorpusEntry,
+    entry: ObfuscatedCorpusEntry,
     task: EvaluationTask,
     input_text: str,
     render: JsonObject | None,
@@ -43,11 +43,11 @@ def wrap_task_input(
 
 
 def _build_task_input_chunks(
-    entry: PerturbedCorpusEntry,
+    entry: ObfuscatedCorpusEntry,
     task: EvaluationTask,
     input_text: str,
 ) -> list[str] | None:
-    replacements = _map_task_replacements_by_character(entry, task)
+    replacements = _map_task_obfuscations_by_character(entry, task)
     chunks: list[str] = []
     cursor = 0
     for character in entry.text:
@@ -64,32 +64,35 @@ def _build_task_input_chunks(
     return chunks if cursor == len(input_text) else None
 
 
-def _map_task_replacements_by_character(
-    entry: PerturbedCorpusEntry,
+def _map_task_obfuscations_by_character(
+    entry: ObfuscatedCorpusEntry,
     task: EvaluationTask,
 ) -> dict[str, str]:
-    if task.source not in {TaskSource.DECOMPOSITION, TaskSource.PERTURBATION}:
+    if task.obfuscation_type not in {
+        ObfuscationType.DECOMPOSITION,
+        ObfuscationType.CROSS_SCRIPT,
+    }:
         return {}
-    if task.variant == TaskVariant.ORIGINAL:
+    if task.scope == ObfuscationScope.ORIGINAL:
         return {}
     groups = {
-        TaskVariant.ANCHOR_ONLY: ("anchor",),
-        TaskVariant.NON_ANCHOR_ONLY: ("non_anchor",),
-        TaskVariant.FULL: ("anchor", "non_anchor"),
-    }[task.variant]
-    field = task.source.value
-    substitutions = require_mapping(entry.substitutions, "entry.substitutions")
+        ObfuscationScope.ANCHOR_ONLY: ("anchor",),
+        ObfuscationScope.BACKGROUND_ONLY: ("background",),
+        ObfuscationScope.FULL: ("anchor", "background"),
+    }[task.scope]
+    field = task.obfuscation_type.value
+    obfuscations = require_mapping(entry.obfuscations, "entry.obfuscations")
     replacements: dict[str, str] = {}
     for group in groups:
         for raw_item in require_list(
-            substitutions[group], f"entry.substitutions.{group}"
+            obfuscations[group], f"entry.obfuscations.{group}"
         ):
-            item = require_mapping(raw_item, f"entry.substitutions.{group}[]")
-            replacements[
-                require_string(item["character"], "substitution.character")
-            ] = require_string(
-                item[field],
-                f"substitution.{field}",
+            item = require_mapping(raw_item, f"entry.obfuscations.{group}[]")
+            replacements[require_string(item["character"], "obfuscation.character")] = (
+                require_string(
+                    item[field],
+                    f"obfuscation.{field}",
+                )
             )
     return replacements
 

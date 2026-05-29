@@ -4,6 +4,7 @@
 *.otf
 # data & config files
 *.toml
+!config/example*.toml
 *.yaml
 *.json
 # image files

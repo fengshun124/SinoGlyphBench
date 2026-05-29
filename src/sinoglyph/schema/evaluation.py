@@ -9,8 +9,13 @@ from typing import Any
 
 from sinoglyph.io import PathLike, load_toml
 from sinoglyph.schema.base import JsonObject
-from sinoglyph.schema.corpus import PerturbedCorpusEntry
-from sinoglyph.schema.types import InputType, ModerationLabel, TaskSource, TaskVariant
+from sinoglyph.schema.corpus import ObfuscatedCorpusEntry
+from sinoglyph.schema.types import (
+    Modality,
+    ModerationLabel,
+    ObfuscationScope,
+    ObfuscationType,
+)
 from sinoglyph.schema.utils import (
     optional_string,
     require_boolean,
@@ -86,34 +91,41 @@ class PromptConfig:
 
 @dataclass(frozen=True)
 class EvaluationTask:
-    input_type: InputType
-    source: TaskSource
-    variant: TaskVariant
+    modality: Modality
+    obfuscation_type: ObfuscationType
+    scope: ObfuscationScope
     name: str
 
     @classmethod
     def parse_mapping(cls, mapping: object, context: str = "task") -> "EvaluationTask":
         raw = require_mapping(mapping, context)
-        require_keys(raw, {"input_type", "source", "variant"}, context)
-        input_type = require_enum(InputType, raw["input_type"], f"{context}.input_type")
-        source = require_enum(TaskSource, raw["source"], f"{context}.source")
-        variant = require_enum(TaskVariant, raw["variant"], f"{context}.variant")
-        if source == TaskSource.TEXT and variant != TaskVariant.ORIGINAL:
-            raise ValueError(f"{context}.source='text' requires variant='original'")
+        require_keys(raw, {"modality", "obfuscation_type", "scope"}, context)
+        modality = require_enum(Modality, raw["modality"], f"{context}.modality")
+        obfuscation_type = require_enum(
+            ObfuscationType,
+            raw["obfuscation_type"],
+            f"{context}.obfuscation_type",
+        )
+        scope = require_enum(ObfuscationScope, raw["scope"], f"{context}.scope")
         raw_name = raw.get("name")
         name = (
             require_string(raw_name, f"{context}.name")
             if raw_name is not None
-            else "/".join((input_type.value, source.value, variant.value))
+            else "/".join((modality.value, obfuscation_type.value, scope.value))
         )
-        return cls(input_type=input_type, source=source, variant=variant, name=name)
+        return cls(
+            modality=modality,
+            obfuscation_type=obfuscation_type,
+            scope=scope,
+            name=name,
+        )
 
     def export_mapping(self) -> JsonObject:
         return {
             "name": self.name,
-            "input_type": self.input_type.value,
-            "source": self.source.value,
-            "variant": self.variant.value,
+            "modality": self.modality.value,
+            "obfuscation_type": self.obfuscation_type.value,
+            "scope": self.scope.value,
         }
 
 
@@ -193,8 +205,8 @@ class EvaluationConfig:
         render = None
         if raw.get("render") is not None:
             render = _normalize_render(raw["render"])
-        if render is None and any(task.input_type == InputType.IMAGE for task in tasks):
-            raise ValueError("render is required when any task has input_type='image'")
+        if render is None and any(task.modality == Modality.IMAGE for task in tasks):
+            raise ValueError("render is required when any task has modality='image'")
         return cls(
             evaluation=evaluation,
             llm=llm,
@@ -500,8 +512,8 @@ def _validate_meta(raw_meta: object, tasks: list[EvaluationTask]) -> JsonObject:
     _normalize_response_schema(meta["response"])
     if "render" in meta:
         _normalize_render(meta["render"])
-    elif any(task.input_type == InputType.IMAGE for task in tasks):
-        raise ValueError("meta.render is required when any task has input_type='image'")
+    elif any(task.modality == Modality.IMAGE for task in tasks):
+        raise ValueError("meta.render is required when any task has modality='image'")
     return meta
 
 
@@ -515,7 +527,7 @@ def _validate_result_entry(
     context = f"corpus[{entry_index}]"
     entry = dict(require_mapping(raw_entry, context))
     require_keys(entry, {"id", "text", "expected_label", "results"}, context)
-    model = PerturbedCorpusEntry.parse_mapping(entry, context)
+    model = ObfuscatedCorpusEntry.parse_mapping(entry, context)
     results = require_list(entry["results"], f"{context}.results")
     result_task_names: set[str] = set()
     for result_index, raw_result in enumerate(results):
@@ -538,7 +550,7 @@ def _validate_result_entry(
 def _validate_task_result(
     result: JsonObject,
     context: str,
-    entry: PerturbedCorpusEntry,
+    entry: ObfuscatedCorpusEntry,
     task_by_name: dict[str, EvaluationTask],
     response_schema: JsonObject,
     render: JsonObject | None,
@@ -548,7 +560,7 @@ def _validate_task_result(
         {
             "task_name",
             "input_text",
-            "substitution_fraction",
+            "obf_density",
             "response",
             "predicted_label",
             "label_match",
@@ -562,16 +574,16 @@ def _validate_task_result(
     if task_name not in task_by_name:
         raise ValueError(f"{context}.task_name references unknown task {task_name!r}")
     task = task_by_name[task_name]
-    expected_input = entry.input_text(task.source.value, task.variant)
-    if task.input_type == InputType.IMAGE:
+    expected_input = entry.input_text(task.obfuscation_type.value, task.scope)
+    if task.modality == Modality.IMAGE:
         from sinoglyph.evaluate.text import wrap_task_input
 
         expected_input = wrap_task_input(entry, task, expected_input, render)
     if result["input_text"] != expected_input:
         raise ValueError(f"{context}.input_text does not match task input")
-    expected_fraction = entry.substitution_fraction(task.source.value, task.variant)
-    if result["substitution_fraction"] != expected_fraction:
-        raise ValueError(f"{context}.substitution_fraction does not match task input")
+    expected_density = entry.obf_density(task.scope)
+    if result["obf_density"] != expected_density:
+        raise ValueError(f"{context}.obf_density does not match task input")
     predicted_label = None
     if result["predicted_label"] is not None:
         predicted_label = require_enum(

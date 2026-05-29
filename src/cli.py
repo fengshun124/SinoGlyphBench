@@ -5,8 +5,8 @@ from tempfile import NamedTemporaryFile
 
 import click
 
-from sinoglyph.pipeline.corpus import generate_perturbed_corpus
 from sinoglyph.io import load_env_file
+from sinoglyph.pipeline.corpus import generate_obfuscated_corpus
 
 
 @click.group()
@@ -148,24 +148,24 @@ def build_catalog_command(
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     default=Path("data/character/catalog.json"),
     show_default=True,
-    help="Character perturbation catalog JSON.",
+    help="Glyph obfuscation catalog JSON.",
 )
 @click.option(
     "-o",
     "--output",
     "output_path",
     type=click.Path(path_type=Path, dir_okay=False),
-    default=Path("data/corpus/perturbed.json"),
+    default=Path("data/corpus/obfuscated.json"),
     show_default=True,
-    help="Generated perturbed corpus JSON.",
+    help="Generated obfuscated corpus JSON.",
 )
 def build_corpus_command(
     annotated_path: Path,
     catalog_path: Path,
     output_path: Path,
 ) -> None:
-    generated = generate_perturbed_corpus(annotated_path, catalog_path, output_path)
-    click.echo(f"Wrote {len(generated)} perturbed corpus entries to {output_path}")
+    generated = generate_obfuscated_corpus(annotated_path, catalog_path, output_path)
+    click.echo(f"Wrote {len(generated)} obfuscated corpus entries to {output_path}")
 
 
 @run_cli.command("evaluate")
@@ -174,7 +174,7 @@ def build_corpus_command(
     "--config",
     "config_path",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
-    default=Path("config/example.toml"),
+    default=Path("config/example.generic.toml"),
     show_default=True,
     help="Evaluation TOML config.",
 )
@@ -240,7 +240,9 @@ def evaluate_command(
     click.echo(f"  output: {resolved_output}")
     click.echo(f"  cache: {resolved_cache}")
     click.echo(f"  cache images: {resolved_cache / 'images'}")
-    click.echo(f"  limit: {'full corpus' if evaluation.limit is None else evaluation.limit}")
+    click.echo(
+        f"  limit: {'full corpus' if evaluation.limit is None else evaluation.limit}"
+    )
     click.echo(f"  n_jobs: {resolved_n_jobs}")
     try:
         result = run_evaluation(
