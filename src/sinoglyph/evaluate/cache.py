@@ -5,10 +5,10 @@ import hashlib
 import json
 import os
 import socket
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from time import time
-from typing import Iterator
 
 from sinoglyph.io import load_json, save_json
 from sinoglyph.schema.base import JsonObject
@@ -53,12 +53,12 @@ class EvaluationCache:
         )
 
     @contextmanager
-    def lock_run(self) -> Iterator[None]:
+    def lock_run(self) -> Generator[None, None, None]:
         with _lock_cache_run(self.cache_dir, self.fingerprint):
             yield
 
     @contextmanager
-    def lock_entry(self, index: int, entry_id: str) -> Iterator[None]:
+    def lock_entry(self, index: int, entry_id: str) -> Generator[None, None, None]:
         with _lock_cache_entry(self.cache_dir, index, entry_id):
             yield
 
@@ -82,7 +82,7 @@ def build_safe_name(value: str) -> str:
 
 
 @contextmanager
-def _lock_cache_run(cache_dir: Path, fingerprint: str) -> Iterator[None]:
+def _lock_cache_run(cache_dir: Path, fingerprint: str) -> Generator[None, None, None]:
     lock_path = cache_dir / ".evaluation.lock"
     lock_payload = json.dumps(
         {
@@ -115,7 +115,9 @@ def _lock_cache_run(cache_dir: Path, fingerprint: str) -> Iterator[None]:
 
 
 @contextmanager
-def _lock_cache_entry(cache_dir: Path, index: int, entry_id: str) -> Iterator[None]:
+def _lock_cache_entry(
+    cache_dir: Path, index: int, entry_id: str
+) -> Generator[None, None, None]:
     lock_path = cache_dir / f".entry-{index}-{build_safe_name(entry_id)}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "w", encoding="utf-8") as lock_file:

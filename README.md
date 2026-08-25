@@ -1,33 +1,51 @@
 # SinoGlyphBench
 
-SinoGlyphBench is a benchmark and toolkit for evaluating how language and multimodal models handle Chinese moderation text under glyph-level obfuscation. It generates obfuscated variants from human-annotated examples, can render inputs as images for visual-language model evaluation, and provides tools to measure whether models can read, recover, and interpret the intended content.
+SinoGlyphBench is a benchmark and toolkit for testing how language and multimodal models handle glyph-obfuscated Chinese moderation text. It generates controlled variants from human-annotated examples, renders inputs for image-based evaluation, and measures whether models can read, recover, and moderate the intended content.
 
-The benchmark uses semantic anchors to separate meaning-critical characters from surrounding context. Each entry can be evaluated as original text, anchor-only obfuscations, background-only obfuscations, or full obfuscations. Each variant can be sent directly as text or rendered as an image for VLM-style evaluation.
+<p align="center">
+  <img src="assets/SinoGlyphBench-logo.png" alt="SinoGlyphBench logo rendered as the catalog-derived cross-script form ｷ并め子字" width="250">
+</p>
+
+<p align="center"><em>拼好字 (“Piece Together Good Characters”) in its catalog-derived cross-script form: ｷ并め子字.</em></p>
+
+Semantic anchors separate label-critical text from the surrounding context. Each entry supports original, anchor-only, background-only, and full scopes, presented either as text or as a rendered image.
+
+## Motivation
+
+Glyph obfuscation is diagnostically useful only when readers can still recover the intended phrase; otherwise, failure may reflect missing visual evidence rather than moderation fragility. SinoGlyphBench therefore uses manually curated decomposition and cross-script substitutions that retain a visible trail to the source characters.
+
+<p align="center">
+  <img src="assets/SinoGlyphBench-similarity.png" alt="Examples motivating SinoGlyphBench through visual similarity between Chinese characters and obfuscated glyph forms" width="900">
+</p>
+
+<p align="center"><em>Recoverability depends on visual similarity to the source characters.</em></p>
 
 ## Corpus Panels
 
-The corpus is constructed from [STATE-ToxiCN](https://aclanthology.org/2025.findings-acl.532/), [ToxicBenchCN (CNTP dataset)](https://aclanthology.org/2025.findings-acl.742/) and [PCR-ToxiCN](https://aclanthology.org/2025.emnlp-industry.172/). With human annotation and filtering, a final set of 157 high-quality examples was selected for the core evaluation panel, and a broader set of 980 examples was selected for a lower-cost panel.
+The corpus is constructed from [STATE-ToxiCN](https://aclanthology.org/2025.findings-acl.532/), [ToxiBenchCN (CNTP dataset)](https://aclanthology.org/2025.findings-acl.742/), and [PCR-ToxiCN](https://aclanthology.org/2025.emnlp-industry.172/). Human annotation and filtering produce a broad panel of 980 examples and a strict diagnostic panel of 157 examples.
 
-The construction of the corpus balances semantic-anchor and non-anchor regions using two quantities:
+The corpus construction balances semantic-anchor and non-anchor regions using two quantities:
 
-- **Substitutable-count difference:** `abs(anchor_substitutable_count - non_anchor_substitutable_count)`, where substitutable characters are those covered by `data/character/catalog.json`.
-- **Anchor/non-anchor length ratio:** `max(anchor_character_count / non_anchor_character_count, non_anchor_character_count / anchor_character_count)`. Anchor spans are all occurrences of each `semantic_anchors[].text`; counts are measured in characters (anchor span length vs. remaining text length).
+- **Substitutable Count Gap:** `abs(anchor_substitutable_count - background_substitutable_count)`. During panel construction, a position is considered substitutable when its character has an entry in `data/character/catalog.json`.
+- **Anchor/Non-Anchor Length Ratio:** `max(anchor_character_count / non_anchor_character_count, non_anchor_character_count / anchor_character_count)`. Anchor spans are all occurrences of each `semantic_anchors[].text`; counts are measured in characters (anchor span length vs. remaining text length).
 
-| File                      | Role                  | Items | Filtering rule                                                                    |
-| ------------------------- | --------------------- | ----: | --------------------------------------------------------------------------------- |
-| `annotated.eligible.json` | Candidate Pool        | 3,031 | Valid source rows with at least one substitutable anchor and non-anchor character |
-| `annotated.json`          | Broad/economy panel   |   980 | Length ratio <= 3 and substitutable-count difference <= 2                         |
-| `annotated.strict.json`   | Core diagnostic panel |   157 | Length ratio <= 1.75 and substitutable-count difference = 0                       |
+| File                       | Role                    | Items | Filtering rule                                                                      |
+| -------------------------- | ----------------------- | ----: | ----------------------------------------------------------------------------------- |
+| `annotated.candidate.json` | Candidate Pool          | 3,031 | Valid source rows with at least one catalog-covered anchor and background character |
+| `annotated.json`           | Broad panel             |   980 | Length ratio <= 3 and substitutable count gap <= 2                                  |
+| `annotated.strict.json`    | Strict diagnostic panel |   157 | Length ratio <= 1.75 and substitutable count gap = 0                                |
 
-| File                      | Anchor subs | Non-anchor subs | Global diff | Max item diff | Max length ratio |
-| ------------------------- | ----------: | --------------: | ----------: | ------------: | ---------------: |
-| `annotated.eligible.json` |      11,457 |          19,932 |      -8,475 |            29 |            40.50 |
-| `annotated.json`          |       3,712 |           3,774 |         -62 |             2 |             3.00 |
-| `annotated.strict.json`   |         554 |             554 |           0 |             0 |             1.75 |
+**Panel-Selection Statistics (Catalog-Covered Source Positions)**
+
+| File                       | Anchor Catalog Positions | Background Catalog Positions | Anchor - Background | Max Item Gap | Max Length Ratio |
+| -------------------------- | -----------------------: | ---------------------------: | ------------------: | -----------: | ---------------: |
+| `annotated.candidate.json` |                   11,457 |                       19,932 |              -8,475 |           29 |            40.50 |
+| `annotated.json`           |                    3,712 |                        3,774 |                 -62 |            2 |             3.00 |
+| `annotated.strict.json`    |                      554 |                          554 |                   0 |            0 |             1.75 |
 
 ## Quickstart
 
-Create an environment with `venv`:
+Set up the project with `venv`:
 
 ```bash
 python -m venv .venv
@@ -36,7 +54,7 @@ pip install -r requirements.txt
 export PYTHONPATH="$PWD/src"
 ```
 
-Or create one with Conda or Mamba:
+Alternatively, use Conda or Mamba:
 
 ```bash
 conda create -n sinoglyph python=3.12
@@ -45,7 +63,7 @@ pip install -r requirements.txt
 export PYTHONPATH="$PWD/src"
 ```
 
-`mamba` can be used in place of `conda` for the same commands. The `PYTHONPATH` line is only needed when importing `sinoglyph` modules directly from Python; the CLI examples work as shown from the repository root.
+You can replace `conda` with `mamba` in these commands. `PYTHONPATH` is only required when importing `sinoglyph` directly; the CLI examples work from the repository root without it.
 
 Font files are expected under `data/font/`. If they are missing, download the Noto font set used by the renderer:
 
@@ -53,9 +71,9 @@ Font files are expected under `data/font/`. If they are missing, download the No
 sh data/font/download.sh
 ```
 
-## Font And LLM Smoke Test
+## Font and LLM Smoke Test
 
-After installing dependencies and fonts, use this command sequence to check that both the renderer and your OpenAI-compatible LLM configuration work. It first renders a multilingual greeting to `/tmp/sinoglyph-greeting.png`, then asks the configured model to read that rendered image and return JSON.
+After installing the dependencies and fonts, use the following commands to test the renderer and an OpenAI-compatible LLM endpoint. The test renders a multilingual greeting to `/tmp/sinoglyph-greeting.png`, then asks the configured model to read it and return JSON.
 
 Set the model endpoint variables first:
 
@@ -118,11 +136,17 @@ The `chat` command reads `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` by defau
 
 ## Pipeline
 
-The full workflow is: build the character catalog, build an obfuscated corpus from annotations, optionally render text probes, then run model evaluation from a TOML config.
+The workflow builds the character catalog and obfuscated corpus, renders text when needed, and runs model evaluation from a TOML configuration.
+
+<p align="center">
+  <img src="assets/SinoGlyphBench-pipeline.png" alt="SinoGlyphBench corpus construction and evaluation workflow" width="1100">
+</p>
+
+<p align="center"><em>Benchmark construction and paired text/image evaluation.</em></p>
 
 The Python implementation is organized by function: `sinoglyph.pipeline` builds catalog and corpus artifacts, `sinoglyph.evaluate` runs model evaluation, `sinoglyph.schema` validates structured data, and `sinoglyph.render` renders text probes and image-mode inputs.
 
-### Build The Character Catalog
+### Build the Character Catalog
 
 The catalog combines character decompositions with substitution rules. It can also render per-character catalog figures for inspection.
 
@@ -130,7 +154,7 @@ The catalog combines character decompositions with substitution rules. It can al
 python src/cli.py catalog
 ```
 
-Fully customized example:
+Example with explicit paths and rendering options:
 
 ```bash
 python src/cli.py catalog \
@@ -146,17 +170,17 @@ python src/cli.py catalog \
   --skip-figures
 ```
 
-Remove `--skip-figures` when you want the rendered catalog figures as well as the JSON catalog.
+This example skips figure generation. Remove `--skip-figures` to render catalog figures alongside the JSON catalog.
 
-### Build The Perturbed Corpus
+### Build the Obfuscated Corpus
 
-The corpus builder applies the character catalog to annotated moderation examples and separates obfuscations into anchor and background positions. By default it reads `data/corpus/annotated.json` and writes `data/corpus/obfuscated.json`. The output preserves each example's `id` and `text` and adds an `obfuscations` object with `anchor`, `background`, and `obf_density` fields so you can map obfuscations back to the original examples.
+The corpus builder applies the character catalog to annotated examples and separates anchor and background obfuscations. By default, it reads `data/corpus/annotated.json` and writes `data/corpus/obfuscated.json`. The output preserves each example's `id` and `text`, then adds `anchor`, `background`, and `obf_density` fields under `obfuscations`.
 
 ```bash
 python src/cli.py corpus
 ```
 
-Fully customized example:
+Example with explicit paths:
 
 ```bash
 python src/cli.py corpus \
@@ -165,7 +189,7 @@ python src/cli.py corpus \
   --output data/corpus/obfuscated.json
 ```
 
-### Render A Text Probe
+### Render a Text Probe
 
 The renderer is useful for checking how an obfuscated string will look before image-mode evaluation.
 
@@ -177,7 +201,7 @@ python src/cli.py render \
   --symbol-font data/font/NotoSansMath-Regular.ttf
 ```
 
-Fully customized example:
+Example with explicit rendering options:
 
 ```bash
 python src/cli.py render \
@@ -200,7 +224,7 @@ python src/cli.py render \
 Evaluation tasks combine three dimensions:
 
 - `modality`: `text` sends the string directly; `image` renders the string first and sends the image.
-- `obfuscation_type`: `decomposition` uses decomposed character parts, and `cross_script` uses substituted glyph-like variants.
+- `obfuscation_type`: `decomposition` rewrites characters as visible components; `cross_script` is the config identifier for cross-script substitution with visually similar symbols.
 - `scope`: `original`, `anchor_only`, `background_only`, or `full`.
 
 For image tasks, the config must include a `[render]` section with fonts and rendering settings.
@@ -212,7 +236,7 @@ The default evaluation response schema expects one JSON object with:
 - `interpretation`: a concise moderation-relevant interpretation.
 - `judge`: one of `hostile`, `abusive`, `benign`, or `context_dependent`.
 
-LLM credentials and endpoints are usually configured through environment variables named by the TOML file:
+The TOML file names the environment variables that provide the model endpoint and credentials:
 
 ```toml
 [llm]
@@ -222,7 +246,7 @@ model_env = "LLM_MODEL"
 max_tokens = 8192
 ```
 
-The runner resolves those environment variable names at runtime. You can also put direct `base_url`, `api_key`, and `model` values in a private local config, but avoid committing credentials.
+The bundled TOML files are templates: replace `<LLM_BASE_URL>`, `<LLM_API_KEY>`, `<LLM_MODEL>`, and `<model_name>` with your environment-variable names and run name. You can instead use direct `base_url`, `api_key`, and `model` values in a private config, but do not commit credentials.
 
 ### Run Evaluation
 
@@ -230,7 +254,7 @@ Evaluation reads a TOML config, sends each configured task to an OpenAI-compatib
 
 ```bash
 python src/cli.py evaluate -c config/example.generic.toml
-python src/cli.py evaluate -c config/example.obfuscation_aware.toml
+python src/cli.py evaluate -c config/example.obf_aware.toml
 ```
 
 Fully customized example:

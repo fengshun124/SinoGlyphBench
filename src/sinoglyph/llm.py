@@ -194,7 +194,9 @@ class ChatClient:
                     "timeout and max_retries cannot be passed with ChatClientConfig"
                 )
             if request_options:
-                raise TypeError("request options cannot be passed with ChatClientConfig")
+                raise TypeError(
+                    "request options cannot be passed with ChatClientConfig"
+                )
             config = base_url
         else:
             config = ChatClientConfig(

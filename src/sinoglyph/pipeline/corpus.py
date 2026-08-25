@@ -13,12 +13,12 @@ from sinoglyph.schema.corpus import (
 
 
 @dataclass(frozen=True)
-class PositionedGlyphObfuscation:
+class _PositionedGlyphObfuscation:
     index: int
     record: GlyphObfuscationRecord
 
 
-class ObfuscatedCorpusBuilder:
+class _ObfuscatedCorpusBuilder:
     def __init__(
         self,
         annotated: list[CorpusEntry],
@@ -101,9 +101,9 @@ class ObfuscatedCorpusBuilder:
             }
         )
 
-    def _find_obfuscations(self, text: str) -> list[PositionedGlyphObfuscation]:
+    def _find_obfuscations(self, text: str) -> list[_PositionedGlyphObfuscation]:
         return [
-            PositionedGlyphObfuscation(
+            _PositionedGlyphObfuscation(
                 index=index,
                 record=GlyphObfuscationRecord(
                     character=character,
@@ -124,7 +124,7 @@ def generate_obfuscated_corpus(
 ) -> JsonArray:
     annotated = load_annotated_corpus(annotated_path)
     catalog = GlyphObfuscationCatalog.load_json(catalog_path)
-    result = ObfuscatedCorpusBuilder(annotated, catalog).build()
+    result = _ObfuscatedCorpusBuilder(annotated, catalog).build()
 
     if output_path is not None:
         save_json(result, output_path)
@@ -149,7 +149,7 @@ def _find_anchor_positions(text: str, anchors: list[JsonObject]) -> set[int]:
 
 def _render_scope_text(
     text: str,
-    obfuscations: list[PositionedGlyphObfuscation],
+    obfuscations: list[_PositionedGlyphObfuscation],
     field: str,
 ) -> str:
     replacement_by_index = {
@@ -163,7 +163,7 @@ def _render_scope_text(
 
 
 def _unique_obfuscation_records(
-    obfuscations: list[PositionedGlyphObfuscation],
+    obfuscations: list[_PositionedGlyphObfuscation],
 ) -> list[JsonObject]:
     records_by_key = {
         _obfuscation_record_key(obfuscation): obfuscation.record.export_mapping()
@@ -173,7 +173,7 @@ def _unique_obfuscation_records(
 
 
 def _obfuscation_record_key(
-    obfuscation: PositionedGlyphObfuscation,
+    obfuscation: _PositionedGlyphObfuscation,
 ) -> tuple[str, str, str]:
     record = obfuscation.record
     return (record.character, record.decomposition, record.cross_script)

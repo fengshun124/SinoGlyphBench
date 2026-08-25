@@ -26,7 +26,7 @@ PREFERRED_GLYPH_FORMS: dict[Parts, list[GlyphForm]] = {
 
 
 @dataclass(frozen=True)
-class CatalogCandidate:
+class _CatalogCandidate:
     form: GlyphForm
     source_parts: Parts
     segments: tuple[GlyphForm, ...]
@@ -46,7 +46,7 @@ class CatalogRenderConfig:
     bg_color: str = "white"
 
 
-class CharacterCatalogBuilder:
+class _CharacterCatalogBuilder:
     def __init__(
         self,
         decomposition: CharacterDecomposition,
@@ -91,7 +91,7 @@ class CharacterCatalogBuilder:
             if character in catalog:
                 existing = cast(list[list[str]], catalog[character]["glyph_forms"])
                 candidates.extend(
-                    CatalogCandidate(
+                    _CatalogCandidate(
                         tuple(form),
                         (character,),
                         (tuple(form),),
@@ -119,12 +119,12 @@ class CharacterCatalogBuilder:
 
     def _make_direct_candidates(
         self, unit: str, glyph_forms: object
-    ) -> list[CatalogCandidate]:
-        candidates: list[CatalogCandidate] = []
+    ) -> list[_CatalogCandidate]:
+        candidates: list[_CatalogCandidate] = []
         for index, form in enumerate(cast(list[list[str]], glyph_forms)):
             normalized = self._normalize_form(tuple(form))
             candidates.append(
-                CatalogCandidate(normalized, (unit,), (normalized,), 1, index)
+                _CatalogCandidate(normalized, (unit,), (normalized,), 1, index)
             )
         return candidates
 
@@ -160,8 +160,8 @@ class CharacterCatalogBuilder:
 
     def _make_layout_candidates(
         self, layouts: Sequence[Parts]
-    ) -> list[CatalogCandidate]:
-        candidates: list[CatalogCandidate] = []
+    ) -> list[_CatalogCandidate]:
+        candidates: list[_CatalogCandidate] = []
         order = 0
 
         for layout in layouts:
@@ -184,7 +184,7 @@ class CharacterCatalogBuilder:
                 form = self._normalize_form(_flatten_segments(raw_segments))
                 segments = self._normalize_segments(raw_segments, form)
                 candidates.append(
-                    CatalogCandidate(
+                    _CatalogCandidate(
                         form, layout, segments, obfuscated_part_count, order
                     )
                 )
@@ -193,9 +193,9 @@ class CharacterCatalogBuilder:
         return candidates
 
     def _rank_candidates(
-        self, candidates: Sequence[CatalogCandidate]
-    ) -> list[CatalogCandidate]:
-        best_by_form: dict[GlyphForm, CatalogCandidate] = {}
+        self, candidates: Sequence[_CatalogCandidate]
+    ) -> list[_CatalogCandidate]:
+        best_by_form: dict[GlyphForm, _CatalogCandidate] = {}
         for candidate in candidates:
             existing = best_by_form.get(candidate.form)
             if existing is None or self._make_rank_key(candidate) < self._make_rank_key(
@@ -205,7 +205,7 @@ class CharacterCatalogBuilder:
 
         return sorted(best_by_form.values(), key=self._make_rank_key)
 
-    def _make_rank_key(self, candidate: CatalogCandidate) -> tuple[int, int, int, int]:
+    def _make_rank_key(self, candidate: _CatalogCandidate) -> tuple[int, int, int, int]:
         return (
             self._score_preference(candidate),
             -_count_non_cjk_codepoints(candidate.form),
@@ -213,7 +213,7 @@ class CharacterCatalogBuilder:
             candidate.order,
         )
 
-    def _score_preference(self, candidate: CatalogCandidate) -> int:
+    def _score_preference(self, candidate: _CatalogCandidate) -> int:
         best_rank = self._preference_default_rank
 
         for preferred_parts, preferred_forms in PREFERRED_GLYPH_FORMS.items():
@@ -261,7 +261,7 @@ def generate_character_catalog(
 ) -> JsonObject:
     decomposition = CharacterDecomposition.load_json(decomposition_path)
     substitution = CharacterSubstitution.load_json(substitution_path)
-    result = CharacterCatalogBuilder(decomposition, substitution).build()
+    result = _CharacterCatalogBuilder(decomposition, substitution).build()
 
     if output_path is not None:
         save_json(result, output_path)

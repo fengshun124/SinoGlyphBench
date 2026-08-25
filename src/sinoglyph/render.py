@@ -1,10 +1,12 @@
 import math
 import os
 import unicodedata as ud
+from collections.abc import Mapping
 from itertools import groupby
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Literal, TypeAlias
+from types import MappingProxyType
+from typing import ClassVar, Literal, NotRequired, TypeAlias, TypedDict, cast
 
 from PIL import Image, ImageColor, ImageFont
 from PIL.Image import Image as PILImage
@@ -13,11 +15,25 @@ from PIL.ImageFont import FreeTypeFont
 
 from sinoglyph.io import PathLike, load_toml
 
-TextRun: TypeAlias = tuple[str, str]
 FontSlot: TypeAlias = Literal["cjk", "lgc", "symbol", "emoji"]
+TextRun: TypeAlias = tuple[FontSlot, str]
 
 ColorLike: TypeAlias = str | tuple[int, int, int] | tuple[int, int, int, int]
 TextAlign: TypeAlias = Literal["left", "center", "right"]
+
+
+class _TextRenderConfigDict(TypedDict):
+    size_px: int
+    fg_color: ColorLike
+    bg_color: ColorLike
+    cjk_font: PathLike
+    lgc_font: PathLike
+    symbol_font: NotRequired[PathLike | None]
+    emoji_font: NotRequired[PathLike | None]
+    dpi: NotRequired[int]
+    pad: NotRequired[int]
+    align: NotRequired[TextAlign]
+
 
 # Module-level caches to avoid reloading font data
 _CMAP_CACHE: dict[str, frozenset[int]] = {}
@@ -50,7 +66,7 @@ class TextRenderConfig:
         self._size_px = size_px
         self._dpi = dpi
         self._pad = pad
-        self._align = self._parse_align(align)
+        self._align: TextAlign = self._parse_align(align)
         self._fg_color = self._parse_color(fg_color, "fg_color")
         self._bg_color = self._parse_color(bg_color, "bg_color")
         self._cjk_font = self._parse_font_path(cjk_font, "cjk_font")
@@ -81,7 +97,7 @@ class TextRenderConfig:
     def parse_dict(cls, mapping: dict[str, object]) -> "TextRenderConfig":
         if not isinstance(mapping, dict):
             raise TypeError("TextRenderConfig.parse_dict expects a mapping")
-        return cls(**mapping)
+        return cls(**cast(_TextRenderConfigDict, mapping))
 
     @classmethod
     def load_config(
@@ -246,7 +262,7 @@ class TextRenderConfig:
     @staticmethod
     def _parse_align(align: str) -> TextAlign:
         TextRenderConfig._validate_align(align)
-        return align.lower()
+        return cast(TextAlign, align.lower())
 
     @staticmethod
     def _load_font(font_path: Path, size: int, name: str) -> FreeTypeFont:
@@ -310,12 +326,14 @@ class TextRenderer:
     _MAX_IMAGE_SIDE_PX = 20000
     _MAX_IMAGE_PIXELS = 64_000_000
 
-    _FONT_CONFIG_KEYS: dict[FontSlot, str] = {
-        "cjk": "cjk_font",
-        "lgc": "lgc_font",
-        "symbol": "symbol_font",
-        "emoji": "emoji_font",
-    }
+    _FONT_CONFIG_KEYS: ClassVar[Mapping[FontSlot, str]] = MappingProxyType(
+        {
+            "cjk": "cjk_font",
+            "lgc": "lgc_font",
+            "symbol": "symbol_font",
+            "emoji": "emoji_font",
+        }
+    )
 
     _LGC = (
         (0x0041, 0x024F),
@@ -473,9 +491,6 @@ class TextRenderer:
 
         output = Path(output_path).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
-        save_kwargs: dict[str, object] = {"dpi": (config.dpi, config.dpi)}
-        if output.suffix.lower() == ".png":
-            save_kwargs.update({"optimize": True, "compress_level": 9})
         temp_name = None
         try:
             with NamedTemporaryFile(
@@ -485,7 +500,15 @@ class TextRenderer:
                 delete=False,
             ) as f:
                 temp_name = f.name
-            image.save(temp_name, **save_kwargs)
+            if output.suffix.lower() == ".png":
+                image.save(
+                    temp_name,
+                    dpi=(config.dpi, config.dpi),
+                    optimize=True,
+                    compress_level=9,
+                )
+            else:
+                image.save(temp_name, dpi=(config.dpi, config.dpi))
             os.replace(temp_name, output)
         except Exception:
             if temp_name is not None:
@@ -561,12 +584,18 @@ class TextRenderer:
                 )
             return config
 
-        missing = [
-            name
-            for name, value in explicit_values.items()
-            if value is None and name not in {"symbol_font", "emoji_font"}
-        ]
-        if missing:
+        if (
+            size_px is None
+            or fg_color is None
+            or bg_color is None
+            or cjk_font is None
+            or lgc_font is None
+        ):
+            missing = [
+                name
+                for name, value in explicit_values.items()
+                if value is None and name not in {"symbol_font", "emoji_font"}
+            ]
             raise TypeError(
                 "missing required render options: " + ", ".join(sorted(missing))
             )
@@ -615,14 +644,15 @@ class TextRenderer:
         return ("symbol", "cjk", "emoji")
 
     def _check_glyphs_for_text(self, text: str, slots: list[FontSlot]) -> None:
-        if missing := next(
+        missing: tuple[str, FontSlot] | None = next(
             (
                 (char, slot)
                 for char, slot in zip(text, slots)
                 if ord(char) not in self._cmaps[slot]
             ),
             None,
-        ):
+        )
+        if missing is not None:
             char, slot = missing
             raise RuntimeError(
                 f"Cannot render U+{ord(char):04X} ({ud.name(char, 'UNNAMED')}) with "

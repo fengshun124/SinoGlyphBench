@@ -37,7 +37,6 @@ def parse_json_response(text: str) -> Any:
         return decoder.decode(stripped)
     except json.JSONDecodeError as exc:
         direct_error = exc
-        pass
 
     # Layer 2: Try scanning for JSON objects/arrays and strict decode
     for start, character in enumerate(stripped):
