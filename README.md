@@ -1,5 +1,7 @@
 # SinoGlyphBench
 
+[![arXiv](https://img.shields.io/badge/arXiv-2609.05843-b31b1b.svg)](https://arxiv.org/abs/2609.05843)
+
 SinoGlyphBench is a benchmark and toolkit for testing how language and multimodal models handle glyph-obfuscated Chinese moderation text. It generates controlled variants from human-annotated examples, renders inputs for image-based evaluation, and measures whether models can read, recover, and moderate the intended content.
 
 <p align="center">
@@ -26,14 +28,30 @@ The corpus is constructed from [STATE-ToxiCN](https://aclanthology.org/2025.find
 
 The corpus construction balances semantic-anchor and non-anchor regions using two quantities:
 
-- **Substitutable Count Gap:** `abs(anchor_substitutable_count - background_substitutable_count)`. During panel construction, a position is considered substitutable when its character has an entry in `data/character/catalog.json`.
+- **Catalog-Covered Count Gap:** `abs(anchor_catalog_count - background_catalog_count)`, counting positions whose characters have entries in `data/character/catalog.json`.
 - **Anchor/Non-Anchor Length Ratio:** `max(anchor_character_count / non_anchor_character_count, non_anchor_character_count / anchor_character_count)`. Anchor spans are all occurrences of each `semantic_anchors[].text`; counts are measured in characters (anchor span length vs. remaining text length).
+
+Perturbable positions additionally require non-empty `glyph_forms`; count gaps use source-character occurrences before substitution-record deduplication.
 
 | File                       | Role                    | Items | Filtering rule                                                                      |
 | -------------------------- | ----------------------- | ----: | ----------------------------------------------------------------------------------- |
 | `annotated.candidate.json` | Candidate Pool          | 3,031 | Valid source rows with at least one catalog-covered anchor and background character |
-| `annotated.json`           | Broad panel             |   980 | Length ratio <= 3 and substitutable count gap <= 2                                  |
-| `annotated.strict.json`    | Strict diagnostic panel |   157 | Length ratio <= 1.75 and substitutable count gap = 0                                |
+| `annotated.json`           | Broad panel             |   980 | Length ratio <= 3, catalog-covered count gap <= 2, and perturbable-position count gap <= 2 |
+| `annotated.strict.json`    | Strict diagnostic panel |   157 | Subset of the broad panel with length ratio <= 1.75 and catalog-covered count gap = 0 |
+
+The dataset release includes the 980-example broad panel and its 157-example strict subset, together with their generated obfuscated variants and the character decomposition, substitution, and catalog files. The 3,031-example candidate pool is reported here for corpus-construction statistics and is not distributed.
+
+Download the dataset asset `SinoGlyphBench-asset.zip` from the repository's [Releases page](https://github.com/fengshun124/SinoGlyphBench/releases).
+
+The released files retain the repository directory structure:
+
+- `data/character/decomposition.json`: curated character decompositions.
+- `data/character/substitution.json`: visually similar cross-script substitutions.
+- `data/character/catalog.json`: generated character catalog containing decompositions and glyph forms.
+- `data/corpus/annotated.json` and `data/corpus/annotated.strict.json`: the broad and strict panels, with source IDs, original text, moderation labels, and semantic anchors.
+- `data/corpus/obfuscated.json` and `data/corpus/obfuscated.strict.json`: matching benchmark inputs with decomposition and cross-script variants for all four scopes, obfuscation records, and densities.
+
+Place the released `data/character/` and `data/corpus/` files under the corresponding repository directories before running the pipeline or evaluation commands below.
 
 **Panel-Selection Statistics (Catalog-Covered Source Positions)**
 
@@ -63,7 +81,7 @@ pip install -r requirements.txt
 export PYTHONPATH="$PWD/src"
 ```
 
-You can replace `conda` with `mamba` in these commands. `PYTHONPATH` is only required when importing `sinoglyph` directly; the CLI examples work from the repository root without it.
+`mamba` can be used in place of `conda` in these commands. `PYTHONPATH` is only required when importing `sinoglyph` directly; the CLI examples work from the repository root without it.
 
 Font files are expected under `data/font/`. If they are missing, download the Noto font set used by the renderer:
 
@@ -246,7 +264,7 @@ model_env = "LLM_MODEL"
 max_tokens = 8192
 ```
 
-The bundled TOML files are templates: replace `<LLM_BASE_URL>`, `<LLM_API_KEY>`, `<LLM_MODEL>`, and `<model_name>` with your environment-variable names and run name. You can instead use direct `base_url`, `api_key`, and `model` values in a private config, but do not commit credentials.
+The bundled TOML files are templates: `<LLM_BASE_URL>`, `<LLM_API_KEY>`, `<LLM_MODEL>`, and `<model_name>` should be replaced with the appropriate environment-variable names and run name. Alternatively, a private configuration can specify `base_url`, `api_key`, and `model` directly. Credentials should not be committed to the repository.
 
 ### Run Evaluation
 
