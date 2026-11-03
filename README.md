@@ -1,6 +1,8 @@
 # SinoGlyphBench
 
-[![arXiv](https://img.shields.io/badge/arXiv-2609.05843-b31b1b.svg)](https://arxiv.org/abs/2609.05843)
+[![ACL Anthology](https://img.shields.io/badge/ACL-Anthology-blue)](https://aclanthology.org/2026.findings-emnlp.2081/) [![arXiv](https://img.shields.io/badge/arXiv-2609.05843-b31b1b.svg)](https://arxiv.org/abs/2609.05843)
+
+🎉 **Exciting news!** Our work has been accepted to [Findings of EMNLP 2026](https://aclanthology.org/2026.findings-emnlp.2081/)!
 
 SinoGlyphBench is a benchmark and toolkit for testing how language and multimodal models handle glyph-obfuscated Chinese moderation text. It generates controlled variants from human-annotated examples, renders inputs for image-based evaluation, and measures whether models can read, recover, and moderate the intended content.
 
